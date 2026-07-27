@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import os
 import json
 import csv
 from datetime import datetime
-from pathlib import Path
 
 from PySide6.QtCore import Qt, QPointF, QTimer
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QBrush, QFont
@@ -34,6 +32,7 @@ from alcohol_tracker.core.calculations import (
     tolerance_series,
 )
 from alcohol_tracker.core.database import IngestionStore
+from alcohol_tracker.core.paths import default_db_path
 from alcohol_tracker.core.settings import load_estimate_settings, save_estimate_settings
 from alcohol_tracker.ui.dialogs import IngestionDialog, PresetDialog, SettingsDialog
 
@@ -216,8 +215,7 @@ class MainWindow(QMainWindow):
     def __init__(self, store: IngestionStore | None = None) -> None:
         super().__init__()
         if store is None:
-            local_app_data = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-            store = IngestionStore(local_app_data / "AlcoholTracker" / "alcohol_tracker.db")
+            store = IngestionStore(default_db_path())
         self.store = store
         self.settings = load_estimate_settings()
         self.selected_day = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)

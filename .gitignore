@@ -10,3 +10,6 @@ __pycache__/
 *.sqlite3
 graphify-out/
 .claude/
+*.zip
+*.tar.gz
+pkgroot/
