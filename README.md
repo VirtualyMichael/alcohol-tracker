@@ -7,6 +7,7 @@ Local Windows desktop app for logging alcohol ingestions, reviewing prior drinki
 - Dark-mode PySide6 desktop GUI
 - Add, edit, and delete ingestions
 - Custom drink presets so common drinks can refill the ingestion form
+- Quick Add bar with a dropdown covering every saved preset, plus one-click buttons for your top drinks
 - Supports shots and fluid ounces with custom ABV
 - Automatically defaults new ingestions to the current time
 - Local SQLite storage under `%LOCALAPPDATA%\AlcoholTracker`

@@ -292,14 +292,9 @@ class MainWindow(QMainWindow):
         delete_button = QPushButton("Delete")
         delete_button.clicked.connect(self.delete_selected_ingestion)
 
-        quick_add_layout = QHBoxLayout()
-        quick_add_layout.setContentsMargins(0, 8, 0, 0)
-        presets = self.store.list_presets()
-        for preset in presets[:6]:
-            btn = QPushButton(f"+ {preset.name}")
-            btn.clicked.connect(lambda checked, p=preset: self.quick_add(p))
-            quick_add_layout.addWidget(btn)
-        quick_add_layout.addStretch(1)
+        self.quick_add_row = QWidget()
+        self.quick_add_layout = QHBoxLayout(self.quick_add_row)
+        self.quick_add_layout.setContentsMargins(0, 8, 0, 0)
 
         top_row = QHBoxLayout()
         top_row.addLayout(text_layout)
@@ -312,9 +307,48 @@ class MainWindow(QMainWindow):
         top_row.addWidget(add_button)
 
         layout.addLayout(top_row)
-        if presets:
-            layout.addLayout(quick_add_layout)
+        layout.addWidget(self.quick_add_row)
+        self.refresh_quick_add_row()
         return frame
+
+    def refresh_quick_add_row(self) -> None:
+        while self.quick_add_layout.count():
+            item = self.quick_add_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        presets = self.store.list_presets()
+        self.quick_add_row.setVisible(bool(presets))
+        if not presets:
+            return
+
+        for preset in presets[:6]:
+            btn = QPushButton(f"+ {preset.name}")
+            btn.clicked.connect(lambda checked, p=preset: self.quick_add(p))
+            self.quick_add_layout.addWidget(btn)
+
+        self.quick_add_combo = QComboBox()
+        self.quick_add_combo.setMinimumWidth(220)
+        for preset in presets:
+            unit = "shots" if preset.unit == "shots" else "fl oz"
+            self.quick_add_combo.addItem(
+                f"{preset.name}  ({preset.amount:g} {unit}, {preset.abv_percent:g}%)",
+                preset.id,
+            )
+        self.quick_add_layout.addWidget(self.quick_add_combo)
+
+        quick_add_custom_button = QPushButton("Quick Add")
+        quick_add_custom_button.clicked.connect(self._quick_add_from_dropdown)
+        self.quick_add_layout.addWidget(quick_add_custom_button)
+
+        self.quick_add_layout.addStretch(1)
+
+    def _quick_add_from_dropdown(self) -> None:
+        preset_id = self.quick_add_combo.currentData()
+        preset = next((p for p in self.store.list_presets() if p.id == preset_id), None)
+        if preset is not None:
+            self.quick_add(preset)
 
     def _build_sidebar(self) -> QFrame:
         frame = QFrame()
@@ -489,6 +523,7 @@ class MainWindow(QMainWindow):
             self.store.add(ingestion)
             self.selected_day = ingestion.occurred_at.replace(hour=0, minute=0, second=0, microsecond=0)
             self.refresh_all()
+        self.refresh_quick_add_row()
 
     def edit_selected_ingestion(self) -> None:
         ingestion = self._selected_ingestion()
@@ -506,6 +541,7 @@ class MainWindow(QMainWindow):
             self.store.update(updated)
             self.selected_day = updated.occurred_at.replace(hour=0, minute=0, second=0, microsecond=0)
             self.refresh_all()
+        self.refresh_quick_add_row()
 
     def delete_selected_ingestion(self) -> None:
         ingestion = self._selected_ingestion()
