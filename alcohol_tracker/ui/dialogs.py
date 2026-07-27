@@ -207,6 +207,65 @@ class IngestionDialog(QDialog):
         return next((preset for preset in self.presets if preset.id == preset_id), None)
 
 
+class PresetDialog(QDialog):
+    def __init__(self, parent=None, preset: DrinkPreset | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Edit Custom Drink" if preset else "New Custom Drink")
+        self.setMinimumWidth(360)
+        self.preset_id = preset.id if preset else None
+
+        self.name = QLineEdit(preset.name if preset else "")
+        self.name.setPlaceholderText("e.g. My Favorite IPA")
+
+        self.amount = QDoubleSpinBox()
+        self.amount.setRange(0.05, 999.0)
+        self.amount.setDecimals(2)
+        self.amount.setSingleStep(0.5)
+        self.amount.setValue(preset.amount if preset else 1.0)
+
+        self.unit = QComboBox()
+        self.unit.addItem("Shots (1.5 fl oz each)", "shots")
+        self.unit.addItem("Fluid ounces", "fl_oz")
+        if preset:
+            self.unit.setCurrentIndex(self.unit.findData(preset.unit))
+
+        self.abv = QDoubleSpinBox()
+        self.abv.setRange(0.1, 99.9)
+        self.abv.setDecimals(1)
+        self.abv.setSingleStep(0.5)
+        self.abv.setSuffix("%")
+        self.abv.setValue(preset.abv_percent if preset else 40.0)
+
+        form = QFormLayout()
+        form.addRow("Drink name", self.name)
+        form.addRow("Amount", self.amount)
+        form.addRow("Unit", self.unit)
+        form.addRow("Alcohol by volume", self.abv)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self._on_accept)
+        buttons.rejected.connect(self.reject)
+
+        layout = QVBoxLayout(self)
+        layout.addLayout(form)
+        layout.addWidget(buttons)
+
+    def _on_accept(self) -> None:
+        if not self.name.text().strip():
+            QMessageBox.warning(self, "Name required", "Enter a name for this drink.")
+            return
+        self.accept()
+
+    def preset(self) -> DrinkPreset:
+        return DrinkPreset(
+            id=self.preset_id,
+            name=self.name.text().strip(),
+            amount=self.amount.value(),
+            unit=str(self.unit.currentData()),
+            abv_percent=self.abv.value(),
+        )
+
+
 class SettingsDialog(QDialog):
     def __init__(self, settings: EstimateSettings, parent=None) -> None:
         super().__init__(parent)

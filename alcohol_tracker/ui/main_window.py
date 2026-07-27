@@ -35,7 +35,7 @@ from alcohol_tracker.core.calculations import (
 )
 from alcohol_tracker.core.database import IngestionStore
 from alcohol_tracker.core.settings import load_estimate_settings, save_estimate_settings
-from alcohol_tracker.ui.dialogs import IngestionDialog, SettingsDialog
+from alcohol_tracker.ui.dialogs import IngestionDialog, PresetDialog, SettingsDialog
 
 
 class TimelineGraph(QWidget):
@@ -319,9 +319,7 @@ class MainWindow(QMainWindow):
                 widget.deleteLater()
 
         presets = self.store.list_presets()
-        self.quick_add_row.setVisible(bool(presets))
-        if not presets:
-            return
+        self.quick_add_row.setVisible(True)
 
         for preset in presets[:6]:
             btn = QPushButton(f"+ {preset.name}")
@@ -339,8 +337,13 @@ class MainWindow(QMainWindow):
         self.quick_add_layout.addWidget(self.quick_add_combo)
 
         quick_add_custom_button = QPushButton("Quick Add")
+        quick_add_custom_button.setEnabled(bool(presets))
         quick_add_custom_button.clicked.connect(self._quick_add_from_dropdown)
         self.quick_add_layout.addWidget(quick_add_custom_button)
+
+        new_custom_drink_button = QPushButton("+ New Custom Drink")
+        new_custom_drink_button.clicked.connect(self.new_custom_drink)
+        self.quick_add_layout.addWidget(new_custom_drink_button)
 
         self.quick_add_layout.addStretch(1)
 
@@ -349,6 +352,22 @@ class MainWindow(QMainWindow):
         preset = next((p for p in self.store.list_presets() if p.id == preset_id), None)
         if preset is not None:
             self.quick_add(preset)
+
+    def new_custom_drink(self) -> None:
+        dialog = PresetDialog(self)
+        if dialog.exec():
+            preset = dialog.preset()
+            self.store.save_preset(preset)
+            self.refresh_quick_add_row()
+            self._select_quick_add_preset_by_name(preset.name)
+
+    def _select_quick_add_preset_by_name(self, name: str) -> None:
+        for index in range(self.quick_add_combo.count()):
+            preset_id = self.quick_add_combo.itemData(index)
+            preset = next((p for p in self.store.list_presets() if p.id == preset_id), None)
+            if preset and preset.name == name:
+                self.quick_add_combo.setCurrentIndex(index)
+                return
 
     def _build_sidebar(self) -> QFrame:
         frame = QFrame()
