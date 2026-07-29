@@ -120,6 +120,33 @@ def estimate_active_standard_drinks(
     return sum(active_amounts)
 
 
+def group_into_sessions(
+    ingestions: list[Ingestion],
+    settings: EstimateSettings | None = None,
+    threshold: float = 0.05,
+) -> list[list[Ingestion]]:
+    """Group ingestions into continuous drinking sessions.
+
+    A session keeps accumulating ingestions as long as the estimated active
+    standard drinks from it hasn't decayed to (near) zero by the time the
+    next ingestion happens. A new session only starts once the previous
+    curve has actually finished, rather than at the midnight calendar
+    boundary.
+    """
+    settings = settings or EstimateSettings()
+    ordered = sorted(ingestions, key=lambda item: item.occurred_at)
+    sessions: list[list[Ingestion]] = []
+    current: list[Ingestion] = []
+    for ingestion in ordered:
+        if current and estimate_active_standard_drinks(current, ingestion.occurred_at, settings) <= threshold:
+            sessions.append(current)
+            current = []
+        current.append(ingestion)
+    if current:
+        sessions.append(current)
+    return sessions
+
+
 def effect_series(
     ingestions: list[Ingestion],
     selected_day: datetime,
@@ -136,10 +163,43 @@ def effect_series(
         start = selected_day.replace(hour=0, minute=0, second=0, microsecond=0)
         end = start + timedelta(hours=12)
 
+    sorted_ingestions = sorted(ingestions, key=lambda item: item.occurred_at)
+    absorption_hours = max(settings.absorption_minutes, 1) / 60.0
+    plateau_hours = max(settings.plateau_minutes, 0) / 60.0
+    elim_per_min = settings.elimination_standard_drinks_per_hour / 60.0
+    active_amounts = [0.0] * len(sorted_ingestions)
+    prev_absorbed = [0.0] * len(sorted_ingestions)
+
     points: list[tuple[datetime, float]] = []
     cursor = start
+    current_time = start
     while cursor <= end:
-        points.append((cursor, estimate_active_standard_drinks(ingestions, cursor, settings)))
+        while current_time < cursor:
+            current_time += timedelta(minutes=1)
+            eligible_for_elim = []
+            for i, ing in enumerate(sorted_ingestions):
+                elapsed_hours = (current_time - ing.occurred_at).total_seconds() / 3600.0
+                if elapsed_hours <= 0:
+                    continue
+                duration_hours = max(ing.duration_minutes, 0) / 60.0
+                ratio = _smoothstep(min(1.0, elapsed_hours / (absorption_hours + duration_hours)))
+                current_absorbed = ing.standard_drinks(settings) * ratio
+                delta_absorbed = current_absorbed - prev_absorbed[i]
+                if delta_absorbed > 0:
+                    active_amounts[i] += delta_absorbed
+                    prev_absorbed[i] = current_absorbed
+                delay_hours = absorption_hours + duration_hours + plateau_hours
+                if elapsed_hours > delay_hours and active_amounts[i] > 0:
+                    eligible_for_elim.append(i)
+            if eligible_for_elim:
+                to_eliminate = elim_per_min
+                for i in eligible_for_elim:
+                    if to_eliminate <= 0:
+                        break
+                    can_eliminate = min(active_amounts[i], to_eliminate)
+                    active_amounts[i] -= can_eliminate
+                    to_eliminate -= can_eliminate
+        points.append((cursor, sum(active_amounts)))
         cursor += timedelta(minutes=10)
     return points
 

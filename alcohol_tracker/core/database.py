@@ -109,6 +109,11 @@ class IngestionStore:
             ).fetchall()
         return [self._row_to_ingestion(row) for row in rows]
 
+    def list_all(self) -> list[Ingestion]:
+        with closing(self._connect()) as connection:
+            rows = connection.execute("SELECT * FROM ingestions ORDER BY occurred_at").fetchall()
+        return [self._row_to_ingestion(row) for row in rows]
+
     def list_consumers(self) -> list[str]:
         with closing(self._connect()) as connection:
             rows = connection.execute("SELECT DISTINCT consumer FROM ingestions ORDER BY consumer").fetchall()

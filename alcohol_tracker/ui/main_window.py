@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import csv
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from PySide6.QtCore import Qt, QPointF, QTimer
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QBrush, QFont
@@ -28,6 +28,7 @@ from alcohol_tracker.core.calculations import (
     estimated_clear_time,
     estimate_active_standard_drinks,
     estimate_bac,
+    group_into_sessions,
     peak_value,
     tolerance_series,
 )
@@ -224,9 +225,10 @@ class MainWindow(QMainWindow):
             store = IngestionStore(default_db_path())
         self.store = store
         self.settings = load_estimate_settings()
-        self.selected_day = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         self.current_ingestions: list[Ingestion] = []
         self.current_consumer = "All"
+        self._auto_follow_night = True
+        self.selected_day = self._natural_selected_day()
 
         self.setWindowTitle("Alcohol Tracker")
         self.resize(1280, 820)
@@ -446,8 +448,32 @@ class MainWindow(QMainWindow):
         self.refresh_tolerance_graph()
 
     def refresh_time_sensitive_views(self) -> None:
+        if self._auto_follow_night:
+            natural_day = self._natural_selected_day()
+            if natural_day.date() != self.selected_day.date():
+                self.selected_day = natural_day
+                self.refresh_days()
         self.refresh_selected_day()
         self.refresh_tolerance_graph()
+
+    def _natural_selected_day(self) -> datetime:
+        """Yesterday, if its effect curve is still active; otherwise today.
+
+        Keeps the previous night's graph on screen past midnight until the
+        drinks from that night have fully cleared, instead of jumping to an
+        empty "today" the moment the calendar date changes.
+        """
+        now = datetime.now()
+        today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        yesterday = today - timedelta(days=1)
+        ingestions = self.store.list_for_day(yesterday)
+        if self.current_consumer != "All":
+            ingestions = [i for i in ingestions if i.consumer == self.current_consumer]
+        if ingestions:
+            points = effect_series(ingestions, yesterday, self.settings)
+            if points and points[-1][0] > now:
+                return yesterday
+        return today
 
     def refresh_days(self) -> None:
         self.days_list.blockSignals(True)
@@ -498,15 +524,31 @@ class MainWindow(QMainWindow):
         day = self.days_list.item(row).data(Qt.UserRole)
         if isinstance(day, datetime):
             self.selected_day = day
+            self._auto_follow_night = day.date() == self._natural_selected_day().date()
             self.refresh_selected_day()
 
+    def _session_ingestions_for_day(self, day: datetime) -> list[Ingestion]:
+        """All ingestions belonging to any drinking session that touches this calendar day.
+
+        A session spanning midnight (still-active curve from the night
+        before) is pulled in whole, so the graph doesn't cut off just
+        because the calendar date changed.
+        """
+        ingestions = self.store.list_all()
+        if self.current_consumer != "All":
+            ingestions = [i for i in ingestions if i.consumer == self.current_consumer]
+        sessions = group_into_sessions(ingestions, self.settings)
+        target_date = day.date()
+        matched: list[Ingestion] = []
+        for session in sessions:
+            if any(i.occurred_at.date() == target_date for i in session):
+                matched.extend(session)
+        matched.sort(key=lambda i: i.occurred_at, reverse=True)
+        return matched
+
     def refresh_selected_day(self) -> None:
-        all_day_ingestions = self.store.list_for_day(self.selected_day)
-        if self.current_consumer == "All":
-            self.current_ingestions = all_day_ingestions
-        else:
-            self.current_ingestions = [i for i in all_day_ingestions if i.consumer == self.current_consumer]
-            
+        self.current_ingestions = self._session_ingestions_for_day(self.selected_day)
+
         self.ingestion_list.clear()
         for ingestion in self.current_ingestions:
             unit_label = "shots" if ingestion.unit == "shots" else "fl oz"
