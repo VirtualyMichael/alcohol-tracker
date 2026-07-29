@@ -42,23 +42,21 @@ class Ingestion:
     duration_minutes: float = 0.0
     consumer: str = "Me"
 
-    @property
-    def fluid_ounces(self) -> float:
+    def fluid_ounces(self, settings: EstimateSettings | None = None) -> float:
         if self.unit == "shots":
-            return self.amount * SHOT_VOLUME_OZ
+            shot_oz = settings.standard_drink_volume_oz if settings else SHOT_VOLUME_OZ
+            return self.amount * shot_oz
         return self.amount
 
-    @property
-    def pure_alcohol_oz(self) -> float:
-        return self.fluid_ounces * (self.abv_percent / 100.0)
+    def pure_alcohol_oz(self, settings: EstimateSettings | None = None) -> float:
+        return self.fluid_ounces(settings) * (self.abv_percent / 100.0)
 
-    @property
-    def pure_alcohol_grams(self) -> float:
-        return self.pure_alcohol_oz * ALCOHOL_DENSITY_GRAMS_PER_FL_OZ
+    def pure_alcohol_grams(self, settings: EstimateSettings | None = None) -> float:
+        return self.pure_alcohol_oz(settings) * ALCOHOL_DENSITY_GRAMS_PER_FL_OZ
 
     def standard_drinks(self, settings: EstimateSettings | None = None) -> float:
         standard_oz = settings.standard_drink_pure_alcohol_oz if settings else STANDARD_DRINK_PURE_ALCOHOL_OZ
-        return self.pure_alcohol_oz / standard_oz
+        return self.pure_alcohol_oz(settings) / standard_oz
 
 
 def estimate_active_standard_drinks(

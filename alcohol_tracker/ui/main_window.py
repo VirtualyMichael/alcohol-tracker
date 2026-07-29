@@ -46,8 +46,12 @@ class TimelineGraph(QWidget):
         self.markers: list[datetime] = []
         self.empty_message = "No ingestions logged for this view"
         self.hover_pos: QPointF | None = None
+        self.bac_converter = None
         self.setMouseTracking(True)
         self.setMinimumHeight(265)
+
+    def set_bac_converter(self, converter) -> None:
+        self.bac_converter = converter
 
     def mouseMoveEvent(self, event) -> None:
         self.hover_pos = event.position()
@@ -150,7 +154,9 @@ class TimelineGraph(QWidget):
                             hover_value = v1
                         break
                 
-                label = f"{hover_time.strftime('%I:%M %p').lstrip('0')} - {hover_value:.2f}"
+                label = f"{hover_time.strftime('%I:%M %p').lstrip('0')}  |  {hover_value:.2f} active drinks"
+                if self.bac_converter is not None:
+                    label += f"  |  {self.bac_converter(hover_value):.3f}% BAC"
                 painter.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
                 painter.setPen(QColor("#ececef"))
                 
@@ -249,6 +255,14 @@ class MainWindow(QMainWindow):
         self.days_list = QListWidget()
         self.ingestion_list = QListWidget()
         self.effect_graph = TimelineGraph("Effect Timeline", "Estimated active standard drinks stacked over time.")
+        self.effect_graph.set_bac_converter(
+            lambda value: estimate_bac(
+                value,
+                self.settings.user_weight_lbs,
+                self.settings.user_gender,
+                self.settings.standard_drink_pure_alcohol_oz,
+            )
+        )
         self.tolerance_graph = TimelineGraph("Tolerance Trend", "Recent-use score with configurable decay.")
         self.total_card = StatCard("standard drinks")
         self.active_card = StatCard("active now")
@@ -500,7 +514,7 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(
                 f"{ingestion.occurred_at.strftime('%I:%M %p').lstrip('0')}  |  {ingestion.label} ({ingestion.consumer}){duration_text}\n"
                 f"{ingestion.amount:g} {unit_label} at {ingestion.abv_percent:g}% ABV  |  "
-                f"{ingestion.standard_drinks(self.settings):.2f} standard drinks  |  {ingestion.pure_alcohol_grams:.0f}g ethanol"
+                f"{ingestion.standard_drinks(self.settings):.2f} standard drinks  |  {ingestion.pure_alcohol_grams(self.settings):.0f}g ethanol"
             )
             item.setData(Qt.UserRole, ingestion.id)
             self.ingestion_list.addItem(item)

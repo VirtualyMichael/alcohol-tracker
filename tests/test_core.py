@@ -25,10 +25,24 @@ class CoreTests(unittest.TestCase):
             label="Whiskey",
         )
 
-        self.assertAlmostEqual(ingestion.fluid_ounces, 1.5)
-        self.assertAlmostEqual(ingestion.pure_alcohol_oz, 0.6)
-        self.assertAlmostEqual(ingestion.pure_alcohol_grams, 14.016)
+        self.assertAlmostEqual(ingestion.fluid_ounces(), 1.5)
+        self.assertAlmostEqual(ingestion.pure_alcohol_oz(), 0.6)
+        self.assertAlmostEqual(ingestion.pure_alcohol_grams(), 14.016)
         self.assertAlmostEqual(ingestion.standard_drinks(), 1.0)
+
+    def test_shot_volume_uses_configured_standard_drink_size(self) -> None:
+        ingestion = Ingestion(
+            id=None,
+            occurred_at=datetime(2026, 7, 12, 20, 0),
+            amount=2.0,
+            unit="shots",
+            abv_percent=40.0,
+            label="Double shot",
+        )
+        settings = EstimateSettings(standard_drink_volume_oz=1.0, standard_drink_abv_percent=40.0)
+
+        self.assertAlmostEqual(ingestion.fluid_ounces(settings), 2.0)
+        self.assertAlmostEqual(ingestion.standard_drinks(settings), 2.0)
 
     def test_settings_change_active_estimate(self) -> None:
         occurred_at = datetime.now() - timedelta(hours=2)
