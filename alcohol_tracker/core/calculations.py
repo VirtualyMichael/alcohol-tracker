@@ -151,6 +151,9 @@ def effect_series(
     ingestions: list[Ingestion],
     selected_day: datetime,
     settings: EstimateSettings | None = None,
+    *,
+    start_override: datetime | None = None,
+    end_override: datetime | None = None,
 ) -> list[tuple[datetime, float]]:
     settings = settings or EstimateSettings()
     if ingestions:
@@ -159,6 +162,9 @@ def effect_series(
         total_drinks = sum(item.standard_drinks(settings) for item in ingestions)
         tail_hours = max(8.0, total_drinks / max(settings.elimination_standard_drinks_per_hour, 0.1) + 2.0 + (settings.plateau_minutes / 60.0))
         end = last + timedelta(hours=tail_hours)
+    elif start_override is not None:
+        start = start_override
+        end = end_override if end_override is not None else start + timedelta(hours=12)
     else:
         start = selected_day.replace(hour=0, minute=0, second=0, microsecond=0)
         end = start + timedelta(hours=12)

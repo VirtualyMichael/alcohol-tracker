@@ -546,6 +546,30 @@ class MainWindow(QMainWindow):
         matched.sort(key=lambda i: i.occurred_at, reverse=True)
         return matched
 
+    def _empty_day_window(self, day: datetime) -> tuple[datetime | None, datetime | None]:
+        """Where a day with no ingestions of its own should start its (empty) graph.
+
+        If the previous calendar day's session already cleared (active
+        drinks decayed to ~0) before now, continue the flat line from the
+        exact moment it cleared instead of resetting to midnight. If the
+        previous day was itself idle, or its session is still active
+        (mid-curve past midnight), fall back to the default template.
+        """
+        previous_day = day - timedelta(days=1)
+        previous_ingestions = self._session_ingestions_for_day(previous_day)
+        if not previous_ingestions:
+            return None, None
+        now = datetime.now()
+        if estimate_active_standard_drinks(previous_ingestions, now, self.settings) > 0.05:
+            return None, None
+        previous_points = effect_series(previous_ingestions, previous_day, self.settings)
+        clear_time = estimated_clear_time(previous_points, threshold=0.05)
+        if clear_time is None and previous_points:
+            clear_time = previous_points[-1][0]
+        if clear_time is None or clear_time >= now:
+            return None, None
+        return clear_time, now
+
     def refresh_selected_day(self) -> None:
         self.current_ingestions = self._session_ingestions_for_day(self.selected_day)
 
@@ -561,7 +585,17 @@ class MainWindow(QMainWindow):
             item.setData(Qt.UserRole, ingestion.id)
             self.ingestion_list.addItem(item)
 
-        points = effect_series(self.current_ingestions, self.selected_day, self.settings)
+        if self.current_ingestions:
+            points = effect_series(self.current_ingestions, self.selected_day, self.settings)
+        else:
+            start_override, end_override = self._empty_day_window(self.selected_day)
+            points = effect_series(
+                self.current_ingestions,
+                self.selected_day,
+                self.settings,
+                start_override=start_override,
+                end_override=end_override,
+            )
         peak_time, peak = peak_value(points)
         clear_time = estimated_clear_time(points)
         total = sum(item.standard_drinks(self.settings) for item in self.current_ingestions)
