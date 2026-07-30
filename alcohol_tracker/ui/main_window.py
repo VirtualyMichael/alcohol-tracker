@@ -4,10 +4,11 @@ import json
 import csv
 from datetime import datetime, timedelta
 
-from PySide6.QtCore import Qt, QPointF, QTimer
+from PySide6.QtCore import Qt, QPointF, QTimer, QDateTime
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QBrush, QFont
 from PySide6.QtWidgets import (
     QComboBox,
+    QDateTimeEdit,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -266,6 +267,20 @@ class MainWindow(QMainWindow):
             )
         )
         self.tolerance_graph = TimelineGraph("Tolerance Trend", "Recent-use score with configurable decay.")
+
+        self._window_is_custom = False
+        self._full_window: tuple[datetime, datetime] | None = None
+        self.window_from = QDateTimeEdit()
+        self.window_from.setCalendarPopup(True)
+        self.window_from.setDisplayFormat("MMM d, h:mm AP")
+        self.window_to = QDateTimeEdit()
+        self.window_to.setCalendarPopup(True)
+        self.window_to.setDisplayFormat("MMM d, h:mm AP")
+        self.reset_window_btn = QPushButton("Full Session")
+        self.reset_window_btn.clicked.connect(self.reset_graph_window)
+        self.window_from.dateTimeChanged.connect(self._on_window_edited)
+        self.window_to.dateTimeChanged.connect(self._on_window_edited)
+
         self.total_card = StatCard("standard drinks")
         self.active_card = StatCard("active now")
         self.bac_card = StatCard("est. BAC %")
@@ -437,7 +452,29 @@ class MainWindow(QMainWindow):
         list_layout.addWidget(self.ingestion_list, 1)
         self.ingestion_list.itemDoubleClicked.connect(lambda _: self.edit_selected_ingestion())
 
-        layout.addWidget(self.effect_graph, 0, 0)
+        window_toolbar = QWidget()
+        toolbar_layout = QHBoxLayout(window_toolbar)
+        toolbar_layout.setContentsMargins(0, 0, 0, 0)
+        toolbar_layout.setSpacing(8)
+        from_label = QLabel("From")
+        from_label.setObjectName("Muted")
+        to_label = QLabel("To")
+        to_label.setObjectName("Muted")
+        toolbar_layout.addWidget(from_label)
+        toolbar_layout.addWidget(self.window_from)
+        toolbar_layout.addWidget(to_label)
+        toolbar_layout.addWidget(self.window_to)
+        toolbar_layout.addWidget(self.reset_window_btn)
+        toolbar_layout.addStretch(1)
+
+        effect_container = QWidget()
+        effect_container_layout = QVBoxLayout(effect_container)
+        effect_container_layout.setContentsMargins(0, 0, 0, 0)
+        effect_container_layout.setSpacing(6)
+        effect_container_layout.addWidget(window_toolbar)
+        effect_container_layout.addWidget(self.effect_graph, 1)
+
+        layout.addWidget(effect_container, 0, 0)
         layout.addWidget(self.tolerance_graph, 0, 1)
         layout.addWidget(list_panel, 1, 0, 2, 2)
         return frame
@@ -452,6 +489,7 @@ class MainWindow(QMainWindow):
             natural_day = self._natural_selected_day()
             if natural_day.date() != self.selected_day.date():
                 self.selected_day = natural_day
+                self._window_is_custom = False
                 self.refresh_days()
         self.refresh_selected_day()
         self.refresh_tolerance_graph()
@@ -525,6 +563,7 @@ class MainWindow(QMainWindow):
         if isinstance(day, datetime):
             self.selected_day = day
             self._auto_follow_night = day.date() == self._natural_selected_day().date()
+            self._window_is_custom = False
             self.refresh_selected_day()
 
     def _session_ingestions_for_day(self, day: datetime) -> list[Ingestion]:
@@ -570,11 +609,69 @@ class MainWindow(QMainWindow):
             return None, None
         return clear_time, now
 
+    @staticmethod
+    def _to_qdatetime(value: datetime) -> QDateTime:
+        return QDateTime.fromSecsSinceEpoch(int(value.timestamp()))
+
+    @staticmethod
+    def _from_qdatetime(value: QDateTime) -> datetime:
+        return datetime.fromtimestamp(value.toSecsSinceEpoch())
+
+    def _set_window_fields(self, start: datetime, end: datetime) -> None:
+        self.window_from.blockSignals(True)
+        self.window_to.blockSignals(True)
+        self.window_from.setDateTime(self._to_qdatetime(start))
+        self.window_to.setDateTime(self._to_qdatetime(end))
+        self.window_from.blockSignals(False)
+        self.window_to.blockSignals(False)
+
+    def _on_window_edited(self, _value: QDateTime) -> None:
+        self._window_is_custom = True
+        self._apply_window()
+
+    def reset_graph_window(self) -> None:
+        self._window_is_custom = False
+        if self._full_window is not None:
+            self._set_window_fields(*self._full_window)
+        self._apply_window()
+
     def refresh_selected_day(self) -> None:
         self.current_ingestions = self._session_ingestions_for_day(self.selected_day)
 
+        if self.current_ingestions:
+            full_start_override, full_end_override = None, None
+        else:
+            full_start_override, full_end_override = self._empty_day_window(self.selected_day)
+        full_points = effect_series(
+            self.current_ingestions,
+            self.selected_day,
+            self.settings,
+            start_override=full_start_override,
+            end_override=full_end_override,
+        )
+        self._full_window = (full_points[0][0], full_points[-1][0])
+        if not self._window_is_custom:
+            self._set_window_fields(*self._full_window)
+
+        self._apply_window()
+
+    def _apply_window(self) -> None:
+        from_dt = self._from_qdatetime(self.window_from.dateTime())
+        to_dt = self._from_qdatetime(self.window_to.dateTime())
+        if to_dt < from_dt:
+            to_dt = from_dt
+
+        visible_ingestions = [i for i in self.current_ingestions if from_dt <= i.occurred_at <= to_dt]
+        points = effect_series(
+            self.current_ingestions,
+            self.selected_day,
+            self.settings,
+            start_override=from_dt,
+            end_override=to_dt,
+        )
+
         self.ingestion_list.clear()
-        for ingestion in self.current_ingestions:
+        for ingestion in visible_ingestions:
             unit_label = "shots" if ingestion.unit == "shots" else "fl oz"
             duration_text = f" over {int(ingestion.duration_minutes)}m" if ingestion.duration_minutes > 0 else ""
             item = QListWidgetItem(
@@ -585,26 +682,16 @@ class MainWindow(QMainWindow):
             item.setData(Qt.UserRole, ingestion.id)
             self.ingestion_list.addItem(item)
 
-        if self.current_ingestions:
-            points = effect_series(self.current_ingestions, self.selected_day, self.settings)
-        else:
-            start_override, end_override = self._empty_day_window(self.selected_day)
-            points = effect_series(
-                self.current_ingestions,
-                self.selected_day,
-                self.settings,
-                start_override=start_override,
-                end_override=end_override,
-            )
         peak_time, peak = peak_value(points)
         clear_time = estimated_clear_time(points)
-        total = sum(item.standard_drinks(self.settings) for item in self.current_ingestions)
-        active_now = estimate_active_standard_drinks(self.current_ingestions, datetime.now(), self.settings)
+        total = sum(item.standard_drinks(self.settings) for item in visible_ingestions)
+        active_eval_time = max(from_dt, min(to_dt, datetime.now()))
+        active_now = estimate_active_standard_drinks(self.current_ingestions, active_eval_time, self.settings)
         bac_now = estimate_bac(active_now, self.settings.user_weight_lbs, self.settings.user_gender, self.settings.standard_drink_pure_alcohol_oz)
 
         self.day_title.setText(self.selected_day.strftime("%a %d %b %Y") + (f" ({self.current_consumer})" if self.current_consumer != "All" else ""))
         self.day_summary.setText(
-            f"{len(self.current_ingestions)} ingestions. Estimates use {self.settings.absorption_minutes} min absorption and "
+            f"{len(visible_ingestions)} ingestions. Estimates use {self.settings.absorption_minutes} min absorption and "
             f"{self.settings.elimination_standard_drinks_per_hour:.2f} standard drinks/hr elimination."
         )
         self.total_card.set_value(f"{total:.2f}")
@@ -612,7 +699,7 @@ class MainWindow(QMainWindow):
         self.bac_card.set_value(f"{bac_now:.3f}%")
         self.peak_card.set_value(f"{peak:.2f}" if peak_time else "--")
         self.clear_card.set_value(clear_time.strftime("%I:%M %p").lstrip("0") if clear_time else "--")
-        self.effect_graph.set_points(points, [item.occurred_at for item in self.current_ingestions])
+        self.effect_graph.set_points(points, [item.occurred_at for item in visible_ingestions])
 
     def refresh_tolerance_graph(self) -> None:
         totals = self.store.daily_standard_drinks(self.settings, self.current_consumer)

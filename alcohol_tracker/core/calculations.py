@@ -157,17 +157,19 @@ def effect_series(
 ) -> list[tuple[datetime, float]]:
     settings = settings or EstimateSettings()
     if ingestions:
-        start = min(item.occurred_at for item in ingestions) - timedelta(minutes=30)
+        default_start = min(item.occurred_at for item in ingestions) - timedelta(minutes=30)
         last = max(item.occurred_at + timedelta(minutes=item.duration_minutes) for item in ingestions)
         total_drinks = sum(item.standard_drinks(settings) for item in ingestions)
         tail_hours = max(8.0, total_drinks / max(settings.elimination_standard_drinks_per_hour, 0.1) + 2.0 + (settings.plateau_minutes / 60.0))
-        end = last + timedelta(hours=tail_hours)
-    elif start_override is not None:
-        start = start_override
-        end = end_override if end_override is not None else start + timedelta(hours=12)
+        default_end = last + timedelta(hours=tail_hours)
     else:
-        start = selected_day.replace(hour=0, minute=0, second=0, microsecond=0)
-        end = start + timedelta(hours=12)
+        default_start = selected_day.replace(hour=0, minute=0, second=0, microsecond=0)
+        default_end = default_start + timedelta(hours=12)
+
+    start = start_override if start_override is not None else default_start
+    end = end_override if end_override is not None else default_end
+    if end < start:
+        end = start
 
     sorted_ingestions = sorted(ingestions, key=lambda item: item.occurred_at)
     absorption_hours = max(settings.absorption_minutes, 1) / 60.0
