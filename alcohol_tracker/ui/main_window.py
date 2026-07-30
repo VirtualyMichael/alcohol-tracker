@@ -663,7 +663,7 @@ class MainWindow(QMainWindow):
 
         visible_ingestions = [i for i in self.current_ingestions if from_dt <= i.occurred_at <= to_dt]
         points = effect_series(
-            self.current_ingestions,
+            visible_ingestions,
             self.selected_day,
             self.settings,
             start_override=from_dt,
@@ -686,7 +686,7 @@ class MainWindow(QMainWindow):
         clear_time = estimated_clear_time(points)
         total = sum(item.standard_drinks(self.settings) for item in visible_ingestions)
         active_eval_time = max(from_dt, min(to_dt, datetime.now()))
-        active_now = estimate_active_standard_drinks(self.current_ingestions, active_eval_time, self.settings)
+        active_now = estimate_active_standard_drinks(visible_ingestions, active_eval_time, self.settings)
         bac_now = estimate_bac(active_now, self.settings.user_weight_lbs, self.settings.user_gender, self.settings.standard_drink_pure_alcohol_oz)
 
         self.day_title.setText(self.selected_day.strftime("%a %d %b %Y") + (f" ({self.current_consumer})" if self.current_consumer != "All" else ""))
