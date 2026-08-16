@@ -23,7 +23,11 @@ from PySide6.QtWidgets import (
 )
 
 from alcohol_tracker.core.calculations import DrinkPreset, Ingestion
-from alcohol_tracker.core.settings import EstimateSettings
+from alcohol_tracker.core.settings import (
+    BAC_MODEL_WATSON,
+    BAC_MODEL_WIDMARK,
+    EstimateSettings,
+)
 
 
 class IngestionDialog(QDialog):
@@ -283,6 +287,21 @@ class SettingsDialog(QDialog):
         self.absorption.setSuffix(" min")
         self.absorption.setSingleStep(5)
         self.absorption.setValue(settings.absorption_minutes)
+        self.absorption.setToolTip(
+            "How long a drink takes to be (95%) absorbed into the bloodstream once "
+            "absorption starts. Sets the first-order absorption rate."
+        )
+
+        self.absorption_lag = QDoubleSpinBox()
+        self.absorption_lag.setRange(0.0, 180.0)
+        self.absorption_lag.setDecimals(0)
+        self.absorption_lag.setSingleStep(5.0)
+        self.absorption_lag.setSuffix(" min")
+        self.absorption_lag.setValue(settings.absorption_lag_minutes)
+        self.absorption_lag.setToolTip(
+            "Delay before a drink starts reaching the bloodstream, mostly gastric "
+            "emptying. Near 0 on an empty stomach; raise it after a full meal."
+        )
 
         self.elimination = QDoubleSpinBox()
         self.elimination.setRange(0.1, 2.0)
@@ -297,12 +316,32 @@ class SettingsDialog(QDialog):
         self.tolerance_half_life.setSingleStep(0.5)
         self.tolerance_half_life.setSuffix(" days")
         self.tolerance_half_life.setValue(settings.tolerance_half_life_days)
-        
-        self.plateau = QSpinBox()
-        self.plateau.setRange(0, 240)
-        self.plateau.setSuffix(" min")
-        self.plateau.setSingleStep(5)
-        self.plateau.setValue(settings.plateau_minutes)
+
+        self.tolerance_max_extra_dose = QDoubleSpinBox()
+        self.tolerance_max_extra_dose.setRange(0.0, 5.0)
+        self.tolerance_max_extra_dose.setDecimals(2)
+        self.tolerance_max_extra_dose.setSingleStep(0.1)
+        self.tolerance_max_extra_dose.setSuffix("x extra")
+        self.tolerance_max_extra_dose.setValue(settings.tolerance_max_extra_dose)
+        self.tolerance_max_extra_dose.setToolTip(
+            "Ceiling on the tolerance curve: max extra dose ever needed to match your baseline, "
+            "e.g. 1.0 means at most 2x the dose (1.0 + 1.0x)."
+        )
+
+        self.tolerance_half_saturation = QDoubleSpinBox()
+        self.tolerance_half_saturation.setRange(0.5, 100.0)
+        self.tolerance_half_saturation.setDecimals(1)
+        self.tolerance_half_saturation.setDecimals(2)
+        self.tolerance_half_saturation.setRange(0.05, 50.0)
+        self.tolerance_half_saturation.setSingleStep(0.25)
+        self.tolerance_half_saturation.setSuffix(" %BAC-hr")
+        self.tolerance_half_saturation.setValue(settings.tolerance_half_saturation_exposure)
+        self.tolerance_half_saturation.setToolTip(
+            "Recency-weighted CNS exposure (BAC above 0.02% integrated over time) at "
+            "which you reach half the tolerance ceiling. Lower = tolerance builds faster.\n"
+            "For reference: ~1.0 is drinking 6 units 4 nights a week; ~4.7 is 10 units "
+            "5 nights a week."
+        )
 
         self.std_volume = QDoubleSpinBox()
         self.std_volume.setRange(0.1, 100.0)
@@ -329,14 +368,44 @@ class SettingsDialog(QDialog):
         self.gender.addItems(["M", "F", "Other"])
         self.gender.setCurrentText("M" if settings.user_gender.upper().startswith("M") else "F" if settings.user_gender.upper().startswith("F") else "Other")
 
+        self.height = QDoubleSpinBox()
+        self.height.setRange(100.0, 250.0)
+        self.height.setDecimals(0)
+        self.height.setSingleStep(1.0)
+        self.height.setSuffix(" cm")
+        self.height.setValue(settings.user_height_cm)
+
+        self.age = QDoubleSpinBox()
+        self.age.setRange(15.0, 100.0)
+        self.age.setDecimals(0)
+        self.age.setSingleStep(1.0)
+        self.age.setSuffix(" yrs")
+        self.age.setValue(settings.user_age_years)
+
+        self.bac_model = QComboBox()
+        self.bac_model.addItem("Watson body water (recommended)", BAC_MODEL_WATSON)
+        self.bac_model.addItem("Widmark fixed factor (legacy)", BAC_MODEL_WIDMARK)
+        self.bac_model.setCurrentIndex(1 if settings.bac_model == BAC_MODEL_WIDMARK else 0)
+        self.bac_model.setToolTip(
+            "Watson estimates your total body water from height, weight, age and sex, "
+            "which is how modern forensic BAC work is done. Widmark uses one fixed "
+            "factor per sex and tends to overestimate BAC for lean or tall people.\n"
+            "Height and age are only used by the Watson model."
+        )
+
         form = QFormLayout()
         form.addRow("Absorption time", self.absorption)
-        form.addRow("Peak effect plateau", self.plateau)
+        form.addRow("Absorption lag (food)", self.absorption_lag)
         form.addRow("Elimination rate", self.elimination)
         form.addRow("Tolerance half-life", self.tolerance_half_life)
+        form.addRow("Tolerance ceiling", self.tolerance_max_extra_dose)
+        form.addRow("Tolerance half-saturation", self.tolerance_half_saturation)
         form.addRow("Standard drink vol", self.std_volume)
         form.addRow("Standard drink ABV", self.std_abv)
+        form.addRow("BAC model", self.bac_model)
         form.addRow("Body weight", self.weight)
+        form.addRow("Height", self.height)
+        form.addRow("Age", self.age)
         form.addRow("Gender (for BAC calc)", self.gender)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
@@ -351,11 +420,16 @@ class SettingsDialog(QDialog):
     def estimate_settings(self) -> EstimateSettings:
         return EstimateSettings(
             absorption_minutes=self.absorption.value(),
+            absorption_lag_minutes=self.absorption_lag.value(),
             elimination_standard_drinks_per_hour=self.elimination.value(),
             tolerance_half_life_days=self.tolerance_half_life.value(),
-            plateau_minutes=self.plateau.value(),
+            tolerance_max_extra_dose=self.tolerance_max_extra_dose.value(),
+            tolerance_half_saturation_exposure=self.tolerance_half_saturation.value(),
             standard_drink_volume_oz=self.std_volume.value(),
             standard_drink_abv_percent=self.std_abv.value(),
             user_weight_lbs=self.weight.value(),
             user_gender=self.gender.currentText(),
+            user_height_cm=self.height.value(),
+            user_age_years=self.age.value(),
+            bac_model=self.bac_model.currentData(),
         )

@@ -13,9 +13,25 @@ Local desktop app for logging alcohol ingestions, reviewing prior drinking days,
 - Local SQLite storage under `%LOCALAPPDATA%\AlcoholTracker` on Windows, or `~/.local/share/AlcoholTracker` on Linux
 - Previous drinking days list
 - Estimated stacked effect timeline with a current-time `Now` marker
-- Approximate tolerance trend with a current-time `Now` marker
-- Adjustable estimate assumptions for absorption, elimination, and tolerance decay
-- Windowed PyInstaller build with no command line window
+- Tolerance trend showing the dose needed to match your tolerance-free baseline, with a projected return-to-baseline date
+- Adjustable estimate assumptions for absorption, elimination, body composition, and tolerance
+- Windowed native build (Nuitka) with no command line window
+
+## How the estimates work
+
+The effect timeline is a one-compartment pharmacokinetic model:
+
+- each drink enters the gut, spread over however long you spent drinking it
+- it moves gut to bloodstream by **first-order absorption** (set by *Absorption time*, after an *Absorption lag* for gastric emptying)
+- the bloodstream pool drains by **zero-order elimination** — a constant drinks/hour, because alcohol dehydrogenase is saturated at ordinary drinking levels
+
+That is why the curve rises in steps as drinks land and then falls in a straight line.
+
+BAC uses the **Watson** total-body-water regressions by default (height, weight, age, sex), which is how modern forensic BAC estimation is done. Ethanol dissolves in body water rather than fat, so composition — not just mass — sets the concentration a dose produces. The older fixed-factor **Widmark** model is still selectable in Settings; it tends to overestimate BAC for lean or tall people.
+
+Tolerance is driven by **CNS exposure**, not drink counts: the BAC curve integrated above 0.02% for each session, in `%BAC-hours`. Because both the height and the duration of the curve grow together, one heavy night counts for far more than the same drinks spread thinly across a week. That exposure decays with the *Tolerance half-life*, and maps onto a **bounded** dose multiplier — chronic tolerance plateaus rather than growing without limit, so the model tops out at the configured ceiling (2x by default).
+
+All of it is tunable in Settings, because these constants genuinely vary between people.
 
 ## Easy Build (Windows)
 
@@ -32,13 +48,22 @@ That script will:
 - run syntax checks
 - run unit tests
 - build the no-console Windows executable
+- build an installer, if Inno Setup is available
 - create/update the desktop shortcut
 
 The packaged app is created at:
 
 ```text
 dist\AlcoholTracker\AlcoholTracker.exe
+dist\installer\AlcoholTracker-<version>-setup.exe
 ```
+
+Building the installer needs [Inno Setup 6](https://jrsoftware.org/isdl.php); the build skips that step with a warning if it isn't installed.
+
+> **Python version for release builds.** Nuitka only fully supports Python up to
+> 3.13; newer versions are flagged as experimental and will say so during the
+> build. Development on a newer Python is fine, but prefer building the binaries
+> you actually ship on the newest Python that Nuitka lists as fully supported.
 
 The desktop shortcut is:
 
@@ -54,6 +79,8 @@ From PowerShell:
 .\build.ps1
 .\build.ps1 -SkipTests
 .\build.ps1 -NoShortcut
+.\build.ps1 -NoInstaller
+.\build.ps1 -SignThumbprint "<code signing certificate thumbprint>"
 ```
 
 From Command Prompt:
@@ -64,6 +91,20 @@ build.bat -SkipTests
 build.bat -NoShortcut
 ```
 
+### Antivirus false positives
+
+Compiled Python apps are routinely flagged by generic heuristics as `Trojan` or
+`Dropper`. This build is deliberately shaped to avoid that — no `--onefile`
+self-extraction, no executable packing, full version metadata and icon, no
+administrator rights, and a plain per-user Inno Setup installer.
+
+The remaining piece is Authenticode code signing, which needs a certificate tied
+to a verified identity. Pass `-SignThumbprint` once you have one, and both the
+executable and the installer are signed and timestamped automatically.
+
+See [packaging/windows/ANTIVIRUS.md](packaging/windows/ANTIVIRUS.md) for the full
+reasoning, certificate options, and how to report a false positive to vendors.
+
 ## Build (Linux)
 
 ```bash
@@ -72,7 +113,7 @@ build.bat -NoShortcut
 ./build.sh --no-shortcut
 ```
 
-That script creates `.venv`, installs dependencies, runs tests, builds the executable with PyInstaller, and (unless `--no-shortcut` is passed) writes an application launcher to `~/.local/share/applications/alcohol-tracker.desktop`.
+That script creates `.venv`, installs dependencies, runs tests, builds the executable with Nuitka, and (unless `--no-shortcut` is passed) writes an application launcher to `~/.local/share/applications/alcohol-tracker.desktop`.
 
 The packaged app is created at:
 

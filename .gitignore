@@ -1,5 +1,6 @@
 .venv/
 build/
+build_nuitka/
 dist/
 __pycache__/
 *.pyc

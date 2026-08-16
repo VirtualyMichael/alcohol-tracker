@@ -25,13 +25,15 @@ from PySide6.QtWidgets import (
 
 from alcohol_tracker.core.calculations import (
     Ingestion,
+    daily_tolerance_load,
     effect_series,
     estimated_clear_time,
     estimate_active_standard_drinks,
+    estimate_alcohol_in_body,
     estimate_bac,
     group_into_sessions,
     peak_value,
-    tolerance_series,
+    tolerance_multiplier_series,
 )
 from alcohol_tracker.core.database import IngestionStore
 from alcohol_tracker.core.paths import default_db_path
@@ -49,11 +51,20 @@ class TimelineGraph(QWidget):
         self.empty_message = "No ingestions logged for this view"
         self.hover_pos: QPointF | None = None
         self.bac_converter = None
+        self.min_value = 0.0
+        self.value_formatter = lambda value: f"{value:.1f}"
+        self.hover_label_fn = None
+        self.reference_marker: tuple[datetime, str] | None = None
+        self.axis_date_only = False
         self.setMouseTracking(True)
         self.setMinimumHeight(265)
 
     def set_bac_converter(self, converter) -> None:
         self.bac_converter = converter
+
+    def set_reference_marker(self, timestamp: datetime | None, text: str) -> None:
+        self.reference_marker = (timestamp, text) if timestamp is not None else None
+        self.update()
 
     def mouseMoveEvent(self, event) -> None:
         self.hover_pos = event.position()
@@ -97,16 +108,18 @@ class TimelineGraph(QWidget):
 
         min_time = min(point[0] for point in self.points)
         max_time = max(point[0] for point in self.points)
-        max_value = max(max(point[1] for point in self.points), 1.0)
+        floor = self.min_value
+        max_value = max(max(point[1] for point in self.points), floor + 1.0)
         total_seconds = max((max_time - min_time).total_seconds(), 1.0)
 
-        if max(point[1] for point in self.points) <= 0:
+        if max(point[1] for point in self.points) <= floor:
             self._draw_now_marker(painter, graph, min_time, max_time, total_seconds)
+            self._draw_reference_marker(painter, graph, min_time, max_time, total_seconds)
             painter.setPen(QColor("#7f858f"))
             painter.drawText(graph, Qt.AlignCenter, self.empty_message)
             return
 
-        mapped = [self._map_point(timestamp, value, min_time, total_seconds, max_value, graph) for timestamp, value in self.points]
+        mapped = [self._map_point(timestamp, value, min_time, total_seconds, max_value, graph, floor) for timestamp, value in self.points]
 
         fill_path = QPainterPath(mapped[0])
         for point in mapped[1:]:
@@ -133,7 +146,8 @@ class TimelineGraph(QWidget):
             painter.drawEllipse(QPointF(x, graph.bottom()), 4, 4)
 
         self._draw_now_marker(painter, graph, min_time, max_time, total_seconds)
-        
+        self._draw_reference_marker(painter, graph, min_time, max_time, total_seconds)
+
         if self.hover_pos and self.points:
             x = self.hover_pos.x()
             if graph.left() <= x <= graph.right():
@@ -156,9 +170,12 @@ class TimelineGraph(QWidget):
                             hover_value = v1
                         break
                 
-                label = f"{hover_time.strftime('%I:%M %p').lstrip('0')}  |  {hover_value:.2f} active drinks"
-                if self.bac_converter is not None:
-                    label += f"  |  {self.bac_converter(hover_value):.3f}% BAC"
+                if self.hover_label_fn is not None:
+                    label = self.hover_label_fn(hover_time, hover_value)
+                else:
+                    label = f"{hover_time.strftime('%I:%M %p').lstrip('0')}  |  {hover_value:.2f} active drinks"
+                    if self.bac_converter is not None:
+                        label += f"  |  {self.bac_converter(hover_value):.3f}% BAC"
                 painter.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
                 painter.setPen(QColor("#ececef"))
                 
@@ -175,9 +192,10 @@ class TimelineGraph(QWidget):
         painter.setFont(QFont("Segoe UI", 8))
         painter.setPen(QColor("#7f858f"))
         bottom = graph.adjusted(0, graph.height() + 8, 0, 28)
-        painter.drawText(bottom, Qt.AlignLeft, min_time.strftime("%b %d %I:%M %p"))
-        painter.drawText(bottom, Qt.AlignRight, max_time.strftime("%b %d %I:%M %p"))
-        painter.drawText(graph.adjusted(0, -22, 0, -graph.height()), Qt.AlignRight, f"Peak {max_value:.1f}")
+        axis_format = "%b %d" if self.axis_date_only else "%b %d %I:%M %p"
+        painter.drawText(bottom, Qt.AlignLeft, min_time.strftime(axis_format))
+        painter.drawText(bottom, Qt.AlignRight, max_time.strftime(axis_format))
+        painter.drawText(graph.adjusted(0, -22, 0, -graph.height()), Qt.AlignRight, f"Peak {self.value_formatter(max_value)}")
 
     def _draw_now_marker(self, painter, graph, min_time, max_time, total_seconds) -> None:
         now = datetime.now()
@@ -192,9 +210,29 @@ class TimelineGraph(QWidget):
         painter.setPen(QColor("#66d9ff"))
         painter.drawText(label_rect.adjusted(int(x - graph.left()) - 24, 0, 0, 0), Qt.AlignLeft, "Now")
 
-    def _map_point(self, timestamp, value, min_time, total_seconds, max_value, graph) -> QPointF:
+    def _draw_reference_marker(self, painter, graph, min_time, max_time, total_seconds) -> None:
+        if self.reference_marker is None:
+            return
+        timestamp, text = self.reference_marker
+        if timestamp < min_time or timestamp > max_time:
+            return
         x_ratio = (timestamp - min_time).total_seconds() / total_seconds
-        y_ratio = min(value / max_value, 1.0)
+        x = graph.left() + graph.width() * x_ratio
+        painter.setPen(QPen(QColor("#7be08a"), 2, Qt.DashLine, Qt.RoundCap))
+        painter.drawLine(int(x), graph.top(), int(x), graph.bottom())
+
+        # Drawn inside the plot so it can never collide with the "Now" label above it.
+        painter.setFont(QFont("Segoe UI", 8, QFont.Weight.DemiBold))
+        painter.setPen(QColor("#7be08a"))
+        fm = painter.fontMetrics()
+        text_width = fm.horizontalAdvance(text)
+        text_x = min(max(x - text_width / 2, graph.left()), graph.right() - text_width)
+        painter.drawText(int(text_x), graph.top() + fm.ascent() + 4, text)
+
+    def _map_point(self, timestamp, value, min_time, total_seconds, max_value, graph, floor: float = 0.0) -> QPointF:
+        x_ratio = (timestamp - min_time).total_seconds() / total_seconds
+        span = max(max_value - floor, 1e-9)
+        y_ratio = min(max(value - floor, 0.0) / span, 1.0)
         return QPointF(
             graph.left() + graph.width() * x_ratio,
             graph.bottom() - graph.height() * y_ratio,
@@ -258,15 +296,16 @@ class MainWindow(QMainWindow):
         self.days_list = QListWidget()
         self.ingestion_list = QListWidget()
         self.effect_graph = TimelineGraph("Effect Timeline", "Estimated active standard drinks stacked over time.")
-        self.effect_graph.set_bac_converter(
-            lambda value: estimate_bac(
-                value,
-                self.settings.user_weight_lbs,
-                self.settings.user_gender,
-                self.settings.standard_drink_pure_alcohol_oz,
-            )
+        self.effect_graph.set_bac_converter(lambda value: estimate_bac(value, self.settings))
+        self.tolerance_graph = TimelineGraph(
+            "Tolerance Trend",
+            "Dose needed to match your baseline, from recent CNS exposure.",
         )
-        self.tolerance_graph = TimelineGraph("Tolerance Trend", "Recent-use score with configurable decay.")
+        self.tolerance_graph.min_value = 1.0
+        self.tolerance_graph.value_formatter = lambda value: f"{value:.2f}x"
+        self.tolerance_graph.axis_date_only = True
+        self.tolerance_graph.empty_message = "No recent drinking — tolerance is at baseline (1.00x)"
+        self.tolerance_graph.hover_label_fn = self._tolerance_hover_label
 
         self._window_is_custom = False
         self._full_window: tuple[datetime, datetime] | None = None
@@ -286,6 +325,11 @@ class MainWindow(QMainWindow):
         self.bac_card = StatCard("est. BAC %")
         self.peak_card = StatCard("estimated peak")
         self.clear_card = StatCard("near zero")
+        self.tolerance_card = StatCard("tolerance now")
+        self.tolerance_card.setToolTip(
+            "Estimated shots of a 40% drink needed today to match how one shot felt "
+            "at your tolerance-free baseline."
+        )
 
         layout.addWidget(self._build_header(), 0, 0, 1, 2)
         layout.addWidget(self._build_sidebar(), 1, 0)
@@ -438,7 +482,14 @@ class MainWindow(QMainWindow):
         stats_layout = QHBoxLayout(stats)
         stats_layout.setContentsMargins(0, 0, 0, 0)
         stats_layout.setSpacing(10)
-        for card in (self.total_card, self.active_card, self.bac_card, self.peak_card, self.clear_card):
+        for card in (
+            self.total_card,
+            self.active_card,
+            self.bac_card,
+            self.peak_card,
+            self.clear_card,
+            self.tolerance_card,
+        ):
             stats_layout.addWidget(card)
 
         list_panel = QFrame()
@@ -566,6 +617,13 @@ class MainWindow(QMainWindow):
             self._window_is_custom = False
             self.refresh_selected_day()
 
+    def _ingestions_for_consumer(self) -> list[Ingestion]:
+        """Every logged ingestion, narrowed to the consumer currently being viewed."""
+        ingestions = self.store.list_all()
+        if self.current_consumer == "All":
+            return ingestions
+        return [item for item in ingestions if item.consumer == self.current_consumer]
+
     def _session_ingestions_for_day(self, day: datetime) -> list[Ingestion]:
         """All ingestions belonging to any drinking session that touches this calendar day.
 
@@ -573,10 +631,7 @@ class MainWindow(QMainWindow):
         before) is pulled in whole, so the graph doesn't cut off just
         because the calendar date changed.
         """
-        ingestions = self.store.list_all()
-        if self.current_consumer != "All":
-            ingestions = [i for i in ingestions if i.consumer == self.current_consumer]
-        sessions = group_into_sessions(ingestions, self.settings)
+        sessions = group_into_sessions(self._ingestions_for_consumer(), self.settings)
         target_date = day.date()
         matched: list[Ingestion] = []
         for session in sessions:
@@ -599,7 +654,9 @@ class MainWindow(QMainWindow):
         if not previous_ingestions:
             return None, None
         now = datetime.now()
-        if estimate_active_standard_drinks(previous_ingestions, now, self.settings) > 0.05:
+        # Counts drinks still being absorbed too, so a nightcap just before
+        # midnight doesn't read as "yesterday already cleared".
+        if estimate_alcohol_in_body(previous_ingestions, now, self.settings) > 0.05:
             return None, None
         previous_points = effect_series(previous_ingestions, previous_day, self.settings)
         clear_time = estimated_clear_time(previous_points, threshold=0.05)
@@ -687,7 +744,7 @@ class MainWindow(QMainWindow):
         total = sum(item.standard_drinks(self.settings) for item in visible_ingestions)
         active_eval_time = max(from_dt, min(to_dt, datetime.now()))
         active_now = estimate_active_standard_drinks(visible_ingestions, active_eval_time, self.settings)
-        bac_now = estimate_bac(active_now, self.settings.user_weight_lbs, self.settings.user_gender, self.settings.standard_drink_pure_alcohol_oz)
+        bac_now = estimate_bac(active_now, self.settings)
 
         self.day_title.setText(self.selected_day.strftime("%a %d %b %Y") + (f" ({self.current_consumer})" if self.current_consumer != "All" else ""))
         self.day_summary.setText(
@@ -701,9 +758,23 @@ class MainWindow(QMainWindow):
         self.clear_card.set_value(clear_time.strftime("%I:%M %p").lstrip("0") if clear_time else "--")
         self.effect_graph.set_points(points, [item.occurred_at for item in visible_ingestions])
 
+    def _tolerance_hover_label(self, hover_time: datetime, hover_value: float) -> str:
+        date_text = hover_time.strftime("%a, %b %d %Y")
+        return f"{date_text}  |  {hover_value:.2f}x  |  {hover_value:.2f} shots to match 1 baseline 40% shot"
+
     def refresh_tolerance_graph(self) -> None:
-        totals = self.store.daily_standard_drinks(self.settings, self.current_consumer)
-        self.tolerance_graph.set_points(tolerance_series(totals, datetime.now(), self.settings))
+        now = datetime.now()
+        loads = daily_tolerance_load(self._ingestions_for_consumer(), self.settings)
+        points = tolerance_multiplier_series(loads, now, self.settings)
+        self.tolerance_graph.set_points(points)
+
+        baseline_threshold = 1.0 + 0.02 * self.settings.tolerance_max_extra_dose
+        clear_time = estimated_clear_time(points, threshold=baseline_threshold)
+        label = f"Back to baseline ~{clear_time.strftime('%b %d')}" if clear_time else ""
+        self.tolerance_graph.set_reference_marker(clear_time, label)
+
+        today = next((value for stamp, value in points if stamp.date() == now.date()), None)
+        self.tolerance_card.set_value(f"{today:.2f}x" if today is not None else "--")
 
     def add_ingestion(self) -> None:
         dialog = IngestionDialog(

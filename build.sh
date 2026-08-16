@@ -15,10 +15,12 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$PROJECT_ROOT"
 
 VENV_PYTHON="$PROJECT_ROOT/.venv/bin/python"
-VENV_PYINSTALLER="$PROJECT_ROOT/.venv/bin/pyinstaller"
-EXE_PATH="$PROJECT_ROOT/dist/AlcoholTracker/AlcoholTracker"
+NUITKA_BUILD_DIR="$PROJECT_ROOT/build_nuitka"
+DIST_DIR="$PROJECT_ROOT/dist/AlcoholTracker"
+EXE_PATH="$DIST_DIR/AlcoholTracker"
+VERSION="1.3.0.0"
 
-echo "Alcohol Tracker build"
+echo "Alcohol Tracker build $VERSION"
 echo "Project: $PROJECT_ROOT"
 
 if [ ! -x "$VENV_PYTHON" ]; then
@@ -27,28 +29,48 @@ if [ ! -x "$VENV_PYTHON" ]; then
 fi
 
 echo "Installing/updating dependencies..."
-"$VENV_PYTHON" -m pip install -r requirements.txt
+"$VENV_PYTHON" -m pip install --disable-pip-version-check -r requirements.txt
 
 echo "Checking Python syntax..."
-"$VENV_PYTHON" -m py_compile \
-    alcohol_tracker/__main__.py \
-    alcohol_tracker/app.py \
-    alcohol_tracker/core/calculations.py \
-    alcohol_tracker/core/database.py \
-    alcohol_tracker/core/paths.py \
-    alcohol_tracker/core/settings.py \
-    alcohol_tracker/ui/dialogs.py \
-    alcohol_tracker/ui/theme.py \
-    alcohol_tracker/ui/main_window.py \
-    tests/test_core.py
+"$VENV_PYTHON" -m compileall -q alcohol_tracker tests
 
 if [ "$SKIP_TESTS" -eq 0 ]; then
     echo "Running tests..."
-    "$VENV_PYTHON" -m unittest tests.test_core
+    "$VENV_PYTHON" -m unittest discover -s tests
 fi
 
-echo "Building windowed executable..."
-"$VENV_PYINSTALLER" --noconfirm --windowed --name AlcoholTracker --paths . alcohol_tracker/__main__.py
+# --standalone, never --onefile: a onefile build unpacks itself into a temp
+# directory and executes from there on every launch, which is what generic
+# "dropper" heuristics look for. See packaging/windows/ANTIVIRUS.md.
+echo "Building windowed executable (Nuitka, native compile)..."
+rm -rf "$NUITKA_BUILD_DIR"
+"$VENV_PYTHON" -m nuitka \
+    --standalone \
+    --python-flag=-m \
+    --deployment \
+    --lto=yes \
+    --jobs=0 \
+    --enable-plugin=pyside6 \
+    --output-dir="$NUITKA_BUILD_DIR" \
+    --output-filename=AlcoholTracker \
+    --product-name="Alcohol Tracker" \
+    --file-version="$VERSION" \
+    --product-version="$VERSION" \
+    --file-description="Alcohol Tracker - personal drink journal" \
+    --copyright="Alcohol Tracker Project" \
+    --assume-yes-for-downloads \
+    alcohol_tracker
+
+BUILT_DIST="$NUITKA_BUILD_DIR/alcohol_tracker.dist"
+if [ ! -d "$BUILT_DIST" ]; then
+    echo "Build finished but Nuitka output was not found at $BUILT_DIST" >&2
+    exit 1
+fi
+
+rm -rf "$DIST_DIR"
+mkdir -p "$(dirname "$DIST_DIR")"
+mv "$BUILT_DIST" "$DIST_DIR"
+rm -rf "$NUITKA_BUILD_DIR"
 
 if [ ! -f "$EXE_PATH" ]; then
     echo "Build finished but executable was not found at $EXE_PATH" >&2
