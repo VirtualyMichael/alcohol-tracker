@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QSplitter,
     QVBoxLayout,
@@ -484,6 +485,11 @@ class MainWindow(QMainWindow):
         self.recipe_search.textChanged.connect(self.refresh_recipe_library)
         self.recipe_list = QListWidget()
         self.recipe_list.setToolTip("Built-in and personal recipes. Select one to copy or edit it.")
+        self.recipe_list.currentItemChanged.connect(lambda *_: self.refresh_recipe_detail())
+        self.recipe_detail = QPlainTextEdit()
+        self.recipe_detail.setReadOnly(True)
+        self.recipe_detail.setPlaceholderText("Select a recipe to see ingredients and instructions.")
+        self.recipe_detail.setMaximumBlockCount(200)
         actions = QWidget()
         actions_layout = QHBoxLayout(actions)
         actions_layout.setContentsMargins(0, 0, 0, 0)
@@ -494,6 +500,7 @@ class MainWindow(QMainWindow):
         recipe_layout.addWidget(recipe_title)
         recipe_layout.addWidget(self.recipe_search)
         recipe_layout.addWidget(self.recipe_list, 1)
+        recipe_layout.addWidget(self.recipe_detail, 2)
         recipe_layout.addWidget(actions)
         splitter.addWidget(recipe_panel)
         splitter.setStretchFactor(0, 3)
@@ -598,6 +605,22 @@ class MainWindow(QMainWindow):
         item = self.recipe_list.currentItem()
         recipe_id = item.data(Qt.UserRole) if item else None
         return next((recipe for recipe in self.store.list_recipes() if recipe.id == recipe_id), None)
+
+    def refresh_recipe_detail(self) -> None:
+        recipe = self._selected_recipe()
+        if recipe is None:
+            self.recipe_detail.clear()
+            return
+        ingredients = "\n".join(
+            f"• {item.get('quantity', '')} {item.get('unit', '')} {item.get('name', '')}".strip()
+            for item in recipe.ingredients
+        )
+        tags = ", ".join(recipe.tags or []) or "—"
+        abv = f"{recipe.abv_percent:g}%" if recipe.abv_percent is not None else "—"
+        self.recipe_detail.setPlainText(
+            f"{recipe.name}\nYield: {recipe.yield_text}   •   ABV: {abv}\nTags: {tags}\n\n"
+            f"INGREDIENTS\n{ingredients}\n\nINSTRUCTIONS\n{recipe.instructions}"
+        )
 
     def _natural_selected_day(self) -> datetime:
         """Yesterday, if its effect curve is still active; otherwise today.
