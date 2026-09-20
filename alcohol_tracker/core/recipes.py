@@ -38,3 +38,21 @@ def parse(text):
 _NAMES = "Margarita;Old Fashioned;Manhattan;Martini;Negroni;Mojito;Daiquiri;Whiskey Sour;Tom Collins;Moscow Mule;Bloody Mary;Cosmopolitan;Espresso Martini;Sidecar;French 75;Aperol Spritz;Paloma;Mai Tai;Pina Colada;Dark and Stormy;Sazerac;Mint Julep;Irish Coffee;White Russian;Black Russian;Long Island Iced Tea;Tequila Sunrise;Blue Lagoon;Singapore Sling;Gimlet;Caipirinha;Pisco Sour;Clover Club;Last Word;Paper Plane;Boulevardier;Vesper;Rusty Nail;Godfather;Amaretto Sour;Brandy Alexander;Grasshopper;Hurricane;Zombie;Painkiller;Jungle Bird;Bramble;Bellini;Mimosa;Kir Royale;Rose Spritz;Hot Toddy;Penicillin;Kentucky Mule;Cuba Libre;Rum Punch;Bahama Mama;Sex on the Beach;Harvey Wallbanger;Screwdriver;Cape Codder;Sea Breeze;Bay Breeze;Lemon Drop;Kamikaze;Washington Apple;Jagerbomb;B-52;Green Tea Shot;White Tea Shot;Buttery Nipple;Chocolate Cake Shot;Woo Woo;Shandy;Black and Tan;Michelada;Sangria;Mulled Wine;Fuzzy Navel;Mudslide;Blue Hawaiian;Frozen Margarita;Ramos Gin Fizz;Corpse Reviver;Bees Knees;Southside;Eastside;Naked and Famous;Oaxaca Old Fashioned;El Diablo;Ranch Water;French Martini;Chocolate Martini;Apple Martini;Dirty Martini;Gin and Tonic;Vodka Soda;Rum and Coke;Whiskey Highball;Scotch and Soda;Seven and Seven;Jack and Coke".split(";")
 # Full named collection uses common base recipes; users can edit every local copy.
 BUILTIN_RECIPES = [Recipe(None, n, [{"quantity":"2 oz","name":"base spirit"},{"quantity":"to taste","name":"mixer, ice, or garnish"}], "Combine over ice, stir or shake as appropriate, and serve.", "1 cocktail", ["cocktail"], 25.0) for n in _NAMES] + [Recipe(None,"Fresh Horchata",[{"quantity":"1 cup","name":"soaked rice"},{"quantity":"2 cups","name":"water"},{"quantity":"1 stick","name":"cinnamon"},{"quantity":"2 tbsp","name":"sugar"}],"Blend soaked rice, water, and cinnamon; strain, sweeten, chill, and serve over ice.","2 servings",["zero-proof","fresh"],0.0),Recipe(None,"Spiked Fresh Horchata",[{"quantity":"1 cup","name":"fresh horchata"},{"quantity":"1.5 oz","name":"reposado tequila"}],"Shake with ice, strain over fresh ice, and dust with cinnamon.","1 cocktail",["horchata","cocktail"],8.0)]
+
+# Search aliases keep the compact built-in data useful even when a recipe card
+# uses a generic base-spirit ingredient. They are also returned alongside tags.
+_LIQUOR_NAMES = {
+    "tequila": "Margarita Paloma Tequila Sunrise Frozen Margarita Oaxaca El Diablo Ranch Water Spiked Fresh Horchata",
+    "vodka": "Moscow Mule Bloody Mary Cosmopolitan Espresso Martini White Russian Black Russian Long Island Blue Lagoon Screwdriver Cape Codder Sea Breeze Bay Breeze Lemon Drop Kamikaze Sex on the Beach Harvey Wallbanger Mudslide French Martini Chocolate Martini Apple Martini Dirty Martini Vodka Soda",
+    "rum": "Mojito Daiquiri Mai Tai Pina Colada Dark and Stormy Long Island Hurricane Zombie Painkiller Jungle Bird Cuba Libre Rum Punch Bahama Mama Blue Hawaiian Rum and Coke",
+    "gin": "Martini Negroni Tom Collins French 75 Singapore Sling Gimlet Clover Club Last Word Bramble Ramos Corpse Bees Southside Eastside Gin and Tonic Dirty Martini",
+    "whiskey": "Old Fashioned Manhattan Whiskey Sour Sazerac Mint Julep Irish Coffee Long Island Rusty Godfather Hot Toddy Penicillin Kentucky Mule Washington Green Tea Seven Jack Whiskey Highball Scotch",
+    "wine": "French 75 Aperol Spritz Bellini Mimosa Kir Rose Sangria Mulled Wine Shandy Black and Tan",
+    "brandy": "Sidecar Brandy Alexander",
+    "liqueur": "Negroni Espresso Martini White Russian Black Russian B-52 Buttery Nipple",
+}
+
+def liquor_terms(recipe: Recipe) -> list[str]:
+    """Likely base liquors for built-ins; explicit ingredient/tag text still wins."""
+    name = recipe.name.casefold()
+    return [liquor for liquor, hints in _LIQUOR_NAMES.items() if any(word.casefold() in name for word in hints.split())]

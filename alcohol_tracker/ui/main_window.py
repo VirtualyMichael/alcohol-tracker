@@ -41,7 +41,7 @@ from alcohol_tracker.core.calculations import (
 from alcohol_tracker.core.database import IngestionStore
 from alcohol_tracker.core.paths import default_db_path
 from alcohol_tracker.core.settings import load_estimate_settings, save_estimate_settings
-from alcohol_tracker.core.recipes import document as recipe_document, parse as parse_recipes
+from alcohol_tracker.core.recipes import document as recipe_document, liquor_terms, parse as parse_recipes
 from alcohol_tracker.ui.dialogs import IngestionDialog, PresetDialog, SettingsDialog
 
 
@@ -585,7 +585,7 @@ class MainWindow(QMainWindow):
         self.recipe_list.clear()
         needle = self.recipe_search.text().casefold().strip()
         for recipe in self.store.list_recipes():
-            searchable = " ".join([recipe.name, " ".join(recipe.tags or []), " ".join(str(item.get("name", "")) for item in recipe.ingredients)]).casefold()
+            searchable = " ".join([recipe.name, " ".join(recipe.tags or []), " ".join(liquor_terms(recipe)), " ".join(str(item.get("name", "")) for item in recipe.ingredients)]).casefold()
             if needle and needle not in searchable:
                 continue
             item = QListWidgetItem(recipe.name)
