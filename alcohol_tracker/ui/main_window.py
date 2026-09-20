@@ -15,11 +15,13 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSplitter,
     QVBoxLayout,
     QWidget,
 )
@@ -467,11 +469,20 @@ class MainWindow(QMainWindow):
         layout.addWidget(title)
         layout.addWidget(self.consumer_filter)
         layout.addWidget(hint)
-        layout.addWidget(self.days_list, 1)
+        splitter = QSplitter(Qt.Vertical)
+        splitter.setChildrenCollapsible(False)
+        splitter.addWidget(self.days_list)
+        recipe_panel = QWidget()
+        recipe_layout = QVBoxLayout(recipe_panel)
+        recipe_layout.setContentsMargins(0, 0, 0, 0)
+        recipe_layout.setSpacing(6)
         recipe_title = QLabel("Recipe Library")
         recipe_title.setObjectName("SectionTitle")
+        self.recipe_search = QLineEdit()
+        self.recipe_search.setPlaceholderText("Search recipes…")
+        self.recipe_search.setClearButtonEnabled(True)
+        self.recipe_search.textChanged.connect(self.refresh_recipe_library)
         self.recipe_list = QListWidget()
-        self.recipe_list.setMaximumHeight(150)
         self.recipe_list.setToolTip("Built-in and personal recipes. Select one to copy or edit it.")
         actions = QWidget()
         actions_layout = QHBoxLayout(actions)
@@ -480,9 +491,15 @@ class MainWindow(QMainWindow):
             button = QPushButton(label)
             button.clicked.connect(callback)
             actions_layout.addWidget(button)
-        layout.addWidget(recipe_title)
-        layout.addWidget(self.recipe_list)
-        layout.addWidget(actions)
+        recipe_layout.addWidget(recipe_title)
+        recipe_layout.addWidget(self.recipe_search)
+        recipe_layout.addWidget(self.recipe_list, 1)
+        recipe_layout.addWidget(actions)
+        splitter.addWidget(recipe_panel)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+        splitter.setSizes([360, 260])
+        layout.addWidget(splitter, 1)
         return frame
 
     def _build_main_panel(self) -> QWidget:
@@ -566,7 +583,11 @@ class MainWindow(QMainWindow):
     def refresh_recipe_library(self) -> None:
         current_id = self.recipe_list.currentItem().data(Qt.UserRole) if self.recipe_list.currentItem() else None
         self.recipe_list.clear()
+        needle = self.recipe_search.text().casefold().strip()
         for recipe in self.store.list_recipes():
+            searchable = " ".join([recipe.name, " ".join(recipe.tags or []), " ".join(str(item.get("name", "")) for item in recipe.ingredients)]).casefold()
+            if needle and needle not in searchable:
+                continue
             item = QListWidgetItem(recipe.name)
             item.setData(Qt.UserRole, recipe.id)
             self.recipe_list.addItem(item)
