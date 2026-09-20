@@ -367,6 +367,8 @@ class MainWindow(QMainWindow):
         recipe_copy.clicked.connect(self.copy_recipe)
         recipe_paste = QPushButton("Paste Recipe")
         recipe_paste.clicked.connect(self.paste_recipe)
+        recipe_edit = QPushButton("Edit Recipe")
+        recipe_edit.clicked.connect(self.edit_recipe)
         add_button = QPushButton("+ Ingestion")
         add_button.setObjectName("PrimaryButton")
         add_button.clicked.connect(self.add_ingestion)
@@ -388,6 +390,7 @@ class MainWindow(QMainWindow):
         top_row.addWidget(recipe_export)
         top_row.addWidget(recipe_paste)
         top_row.addWidget(recipe_copy)
+        top_row.addWidget(recipe_edit)
         top_row.addWidget(settings_button)
         top_row.addWidget(delete_button)
         top_row.addWidget(edit_button)
@@ -894,6 +897,20 @@ class MainWindow(QMainWindow):
         try: added, skipped = self.store.import_recipes(parse_recipes(text))
         except Exception as exc: QMessageBox.critical(self, "Recipe import failed", str(exc)); return
         QMessageBox.information(self, "Recipes imported", f"Added {added} recipes; skipped {skipped} exact duplicates.")
+
+    def edit_recipe(self) -> None:
+        recipes = self.store.list_recipes(); names = [recipe.name for recipe in recipes]
+        name, ok = QInputDialog.getItem(self, "Edit recipe", "Recipe", names, 0, False)
+        if not ok: return
+        original = next(recipe for recipe in recipes if recipe.name == name)
+        text, ok = QInputDialog.getMultiLineText(self, "Edit recipe", "Edit the structured recipe data:", json.dumps(recipe_document([original]), indent=2))
+        if not ok: return
+        try:
+            updated = parse_recipes(text)
+            if len(updated) != 1: raise ValueError("Edit exactly one recipe at a time.")
+            self.store.update_recipe(type(original)(original.id, **updated[0].payload()))
+        except Exception as exc: QMessageBox.critical(self, "Recipe update failed", str(exc)); return
+        QMessageBox.information(self, "Recipe updated", "The recipe was saved locally.")
 
     def import_recipes(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Import Recipes", "", "Recipe Files (*.json);;Text Files (*.txt)")

@@ -92,6 +92,12 @@ class IngestionStore:
     def import_recipes(self, recipes: list[Recipe]) -> tuple[int,int]:
         added=sum(self.save_recipe(recipe) for recipe in recipes); return added,len(recipes)-added
 
+    def update_recipe(self, recipe: Recipe) -> None:
+        if recipe.id is None: raise ValueError("Recipe has no id.")
+        now = datetime.now().isoformat(timespec="seconds")
+        with closing(self._connect()) as connection:
+            connection.execute("UPDATE recipes SET name=?, payload=?, fingerprint=?, updated_at=? WHERE id=?", (recipe.name,json.dumps(recipe.payload(),sort_keys=True),recipe.fingerprint(),now,recipe.id)); connection.commit()
+
     def _seed_presets(self) -> None:
         if self.list_presets():
             return
