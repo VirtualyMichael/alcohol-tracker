@@ -359,16 +359,6 @@ class MainWindow(QMainWindow):
         export_button.clicked.connect(self.export_data)
         import_button = QPushButton("Import")
         import_button.clicked.connect(self.import_data)
-        recipe_export = QPushButton("Export Recipes")
-        recipe_export.clicked.connect(self.export_recipes)
-        recipe_import = QPushButton("Import Recipes")
-        recipe_import.clicked.connect(self.import_recipes)
-        recipe_copy = QPushButton("Copy Recipe")
-        recipe_copy.clicked.connect(self.copy_recipe)
-        recipe_paste = QPushButton("Paste Recipe")
-        recipe_paste.clicked.connect(self.paste_recipe)
-        recipe_edit = QPushButton("Edit Recipe")
-        recipe_edit.clicked.connect(self.edit_recipe)
         add_button = QPushButton("+ Ingestion")
         add_button.setObjectName("PrimaryButton")
         add_button.clicked.connect(self.add_ingestion)
@@ -386,11 +376,6 @@ class MainWindow(QMainWindow):
         top_row.addStretch(1)
         top_row.addWidget(import_button)
         top_row.addWidget(export_button)
-        top_row.addWidget(recipe_import)
-        top_row.addWidget(recipe_export)
-        top_row.addWidget(recipe_paste)
-        top_row.addWidget(recipe_copy)
-        top_row.addWidget(recipe_edit)
         top_row.addWidget(settings_button)
         top_row.addWidget(delete_button)
         top_row.addWidget(edit_button)
@@ -483,6 +468,21 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.consumer_filter)
         layout.addWidget(hint)
         layout.addWidget(self.days_list, 1)
+        recipe_title = QLabel("Recipe Library")
+        recipe_title.setObjectName("SectionTitle")
+        self.recipe_list = QListWidget()
+        self.recipe_list.setMaximumHeight(150)
+        self.recipe_list.setToolTip("Built-in and personal recipes. Select one to copy or edit it.")
+        actions = QWidget()
+        actions_layout = QHBoxLayout(actions)
+        actions_layout.setContentsMargins(0, 0, 0, 0)
+        for label, callback in (("Copy", self.copy_recipe), ("Edit", self.edit_recipe), ("Import", self.import_recipes), ("Export", self.export_recipes)):
+            button = QPushButton(label)
+            button.clicked.connect(callback)
+            actions_layout.addWidget(button)
+        layout.addWidget(recipe_title)
+        layout.addWidget(self.recipe_list)
+        layout.addWidget(actions)
         return frame
 
     def _build_main_panel(self) -> QWidget:
@@ -549,6 +549,7 @@ class MainWindow(QMainWindow):
 
     def refresh_all(self) -> None:
         self.refresh_days()
+        self.refresh_recipe_library()
         self.refresh_selected_day()
         self.refresh_tolerance_graph()
 
@@ -561,6 +562,21 @@ class MainWindow(QMainWindow):
                 self.refresh_days()
         self.refresh_selected_day()
         self.refresh_tolerance_graph()
+
+    def refresh_recipe_library(self) -> None:
+        current_id = self.recipe_list.currentItem().data(Qt.UserRole) if self.recipe_list.currentItem() else None
+        self.recipe_list.clear()
+        for recipe in self.store.list_recipes():
+            item = QListWidgetItem(recipe.name)
+            item.setData(Qt.UserRole, recipe.id)
+            self.recipe_list.addItem(item)
+            if recipe.id == current_id:
+                self.recipe_list.setCurrentItem(item)
+
+    def _selected_recipe(self):
+        item = self.recipe_list.currentItem()
+        recipe_id = item.data(Qt.UserRole) if item else None
+        return next((recipe for recipe in self.store.list_recipes() if recipe.id == recipe_id), None)
 
     def _natural_selected_day(self) -> datetime:
         """Yesterday, if its effect curve is still active; otherwise today.
@@ -883,13 +899,10 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "Recipes exported", f"Exported {len(self.store.list_recipes())} recipes. Each recipe can also be copied as a readable share card from the recipe library.")
 
     def copy_recipe(self) -> None:
-        recipes = self.store.list_recipes()
-        names = [recipe.name for recipe in recipes]
-        name, ok = QInputDialog.getItem(self, "Copy recipe", "Recipe", names, 0, False)
-        if ok:
-            recipe = next(recipe for recipe in recipes if recipe.name == name)
-            self.clipboard().setText(recipe.share_text())
-            QMessageBox.information(self, "Recipe copied", "A readable recipe card and importable share code are on your clipboard.")
+        recipe = self._selected_recipe()
+        if recipe is None: QMessageBox.information(self, "Select a recipe", "Choose a recipe in the library first."); return
+        self.clipboard().setText(recipe.share_text())
+        QMessageBox.information(self, "Recipe copied", "A readable recipe card and importable share code are on your clipboard.")
 
     def paste_recipe(self) -> None:
         text, ok = QInputDialog.getMultiLineText(self, "Paste recipe", "Paste a recipe card or Alcohol Tracker share code:")
@@ -899,10 +912,8 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "Recipes imported", f"Added {added} recipes; skipped {skipped} exact duplicates.")
 
     def edit_recipe(self) -> None:
-        recipes = self.store.list_recipes(); names = [recipe.name for recipe in recipes]
-        name, ok = QInputDialog.getItem(self, "Edit recipe", "Recipe", names, 0, False)
-        if not ok: return
-        original = next(recipe for recipe in recipes if recipe.name == name)
+        original = self._selected_recipe()
+        if original is None: QMessageBox.information(self, "Select a recipe", "Choose a recipe in the library first."); return
         text, ok = QInputDialog.getMultiLineText(self, "Edit recipe", "Edit the structured recipe data:", json.dumps(recipe_document([original]), indent=2))
         if not ok: return
         try:
@@ -910,6 +921,7 @@ class MainWindow(QMainWindow):
             if len(updated) != 1: raise ValueError("Edit exactly one recipe at a time.")
             self.store.update_recipe(type(original)(original.id, **updated[0].payload()))
         except Exception as exc: QMessageBox.critical(self, "Recipe update failed", str(exc)); return
+        self.refresh_recipe_library()
         QMessageBox.information(self, "Recipe updated", "The recipe was saved locally.")
 
     def import_recipes(self) -> None:
@@ -920,6 +932,7 @@ class MainWindow(QMainWindow):
             added, skipped = self.store.import_recipes(recipes)
         except Exception as exc:
             QMessageBox.critical(self, "Recipe import failed", str(exc)); return
+        self.refresh_recipe_library()
         QMessageBox.information(self, "Recipes imported", f"Added {added} recipes; skipped {skipped} exact duplicates.")
 
     def export_data(self) -> None:
