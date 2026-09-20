@@ -185,21 +185,39 @@ class CoreTests(unittest.TestCase):
         # It should be gone a few hours later, not lingering forever.
         self.assertAlmostEqual(points[-1][1], 0.0, places=6)
 
-    def test_elimination_is_zero_order_on_the_whole_pool(self) -> None:
-        """Once absorption is done the curve falls at a constant drinks/hour."""
+    def test_elimination_is_near_constant_while_well_above_saturation(self) -> None:
+        """The bulk of the curve falls at close to the configured drinks/hour."""
         settings = EstimateSettings(elimination_standard_drinks_per_hour=0.6)
         start = datetime(2026, 7, 1, 20, 0)
         points = dict(
             simulate_active_drinks(
-                self._shots(6, start), start, start + timedelta(hours=20), settings, step_minutes=60
+                self._shots(8, start), start, start + timedelta(hours=24), settings, step_minutes=60
             )
         )
 
-        # Sample two hours well after the last drink finished absorbing.
-        first = points[start + timedelta(hours=9)]
-        second = points[start + timedelta(hours=10)]
-        self.assertGreater(first, 0.6)
-        self.assertAlmostEqual(first - second, 0.6, places=2)
+        # Two hours after absorption finished, with plenty still in the blood, the
+        # enzyme is saturated and the decline should be within 10% of the ceiling.
+        high = points[start + timedelta(hours=8)] - points[start + timedelta(hours=9)]
+        self.assertGreater(points[start + timedelta(hours=8)], 2.0)
+        self.assertGreater(high, 0.54)
+        self.assertLessEqual(high, 0.6)
+
+    def test_elimination_slows_down_as_the_pool_empties(self) -> None:
+        """Saturable kinetics: the last of a drink clears slower than the bulk."""
+        settings = EstimateSettings(elimination_standard_drinks_per_hour=0.6)
+        start = datetime(2026, 7, 1, 20, 0)
+        points = simulate_active_drinks(
+            self._shots(8, start), start, start + timedelta(hours=24), settings, step_minutes=60
+        )
+        values = [value for _, value in points]
+
+        rates = [
+            values[index] - values[index + 1]
+            for index in range(len(values) - 1)
+            if values[index] > 0
+        ]
+        busy, tail = max(rates), min(rates)
+        self.assertLess(tail, busy)
 
     def test_drinking_slowly_lowers_the_peak(self) -> None:
         """The same alcohol spread over a longer session should peak lower."""

@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QListWidget,
     QListWidgetItem,
@@ -38,6 +39,7 @@ from alcohol_tracker.core.calculations import (
 from alcohol_tracker.core.database import IngestionStore
 from alcohol_tracker.core.paths import default_db_path
 from alcohol_tracker.core.settings import load_estimate_settings, save_estimate_settings
+from alcohol_tracker.core.recipes import document as recipe_document, parse as parse_recipes
 from alcohol_tracker.ui.dialogs import IngestionDialog, PresetDialog, SettingsDialog
 
 
@@ -357,6 +359,14 @@ class MainWindow(QMainWindow):
         export_button.clicked.connect(self.export_data)
         import_button = QPushButton("Import")
         import_button.clicked.connect(self.import_data)
+        recipe_export = QPushButton("Export Recipes")
+        recipe_export.clicked.connect(self.export_recipes)
+        recipe_import = QPushButton("Import Recipes")
+        recipe_import.clicked.connect(self.import_recipes)
+        recipe_copy = QPushButton("Copy Recipe")
+        recipe_copy.clicked.connect(self.copy_recipe)
+        recipe_paste = QPushButton("Paste Recipe")
+        recipe_paste.clicked.connect(self.paste_recipe)
         add_button = QPushButton("+ Ingestion")
         add_button.setObjectName("PrimaryButton")
         add_button.clicked.connect(self.add_ingestion)
@@ -374,6 +384,10 @@ class MainWindow(QMainWindow):
         top_row.addStretch(1)
         top_row.addWidget(import_button)
         top_row.addWidget(export_button)
+        top_row.addWidget(recipe_import)
+        top_row.addWidget(recipe_export)
+        top_row.addWidget(recipe_paste)
+        top_row.addWidget(recipe_copy)
         top_row.addWidget(settings_button)
         top_row.addWidget(delete_button)
         top_row.addWidget(edit_button)
@@ -858,6 +872,38 @@ class MainWindow(QMainWindow):
         self.current_consumer = "Me"
         self._refresh_consumer_filter()
         self.refresh_all()
+
+    def export_recipes(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(self, "Export Recipes", "recipes.json", "Recipe Files (*.json)")
+        if not path: return
+        with open(path, "w", encoding="utf-8") as handle: json.dump(recipe_document(self.store.list_recipes()), handle, indent=2)
+        QMessageBox.information(self, "Recipes exported", f"Exported {len(self.store.list_recipes())} recipes. Each recipe can also be copied as a readable share card from the recipe library.")
+
+    def copy_recipe(self) -> None:
+        recipes = self.store.list_recipes()
+        names = [recipe.name for recipe in recipes]
+        name, ok = QInputDialog.getItem(self, "Copy recipe", "Recipe", names, 0, False)
+        if ok:
+            recipe = next(recipe for recipe in recipes if recipe.name == name)
+            self.clipboard().setText(recipe.share_text())
+            QMessageBox.information(self, "Recipe copied", "A readable recipe card and importable share code are on your clipboard.")
+
+    def paste_recipe(self) -> None:
+        text, ok = QInputDialog.getMultiLineText(self, "Paste recipe", "Paste a recipe card or Alcohol Tracker share code:")
+        if not ok or not text.strip(): return
+        try: added, skipped = self.store.import_recipes(parse_recipes(text))
+        except Exception as exc: QMessageBox.critical(self, "Recipe import failed", str(exc)); return
+        QMessageBox.information(self, "Recipes imported", f"Added {added} recipes; skipped {skipped} exact duplicates.")
+
+    def import_recipes(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Import Recipes", "", "Recipe Files (*.json);;Text Files (*.txt)")
+        if not path: return
+        try:
+            with open(path, encoding="utf-8") as handle: recipes = parse_recipes(handle.read())
+            added, skipped = self.store.import_recipes(recipes)
+        except Exception as exc:
+            QMessageBox.critical(self, "Recipe import failed", str(exc)); return
+        QMessageBox.information(self, "Recipes imported", f"Added {added} recipes; skipped {skipped} exact duplicates.")
 
     def export_data(self) -> None:
         path, _ = QFileDialog.getSaveFileName(self, "Export Data", "", "JSON Files (*.json);;CSV Files (*.csv)")

@@ -5,14 +5,20 @@ The model is a standard one-compartment pharmacokinetic treatment of ethanol:
 * each drink enters the gut, optionally spread over the time spent drinking it,
 * it moves gut -> bloodstream by *first-order* absorption (an exponential
   approach to fully absorbed, set by ``absorption_minutes``),
-* the bloodstream pool drains by *zero-order* elimination (a constant drinks/hour,
-  set by ``elimination_standard_drinks_per_hour``).
+* the bloodstream pool drains by *Michaelis-Menten* elimination, approaching a
+  ceiling of ``elimination_standard_drinks_per_hour``.
 
-Zero-order elimination is the right shape for ethanol: alcohol dehydrogenase is
-saturated at ordinary drinking concentrations, so the body clears a roughly fixed
-amount per hour rather than a fixed fraction. Everything downstream (BAC, the
-effect graph, the tolerance model) reads off the same simulated pool, so the
-numbers on screen are always mutually consistent.
+Elimination looks essentially zero-order for most of a session — alcohol
+dehydrogenase is saturated at ordinary drinking concentrations, so the body clears
+a roughly fixed amount per hour rather than a fixed fraction, which is why the
+curve falls in a straight line. It is only saturable rather than truly zero-order,
+though: while blood alcohol is still low, clearance runs measurably slower than the
+maximum. That matters at both ends of a session, keeping the liver from
+implausibly eating a large fraction of a drink before it has even been absorbed,
+and giving the curve its real trailing tail.
+
+Everything downstream (BAC, the effect graph, the tolerance model) reads off the
+same simulated pool, so the numbers on screen are always mutually consistent.
 
 None of this is a medical or legal safety measurement. It is a journaling
 estimate with user-tunable constants.
@@ -42,6 +48,15 @@ ABSORPTION_COMPLETION_FRACTION = 0.95
 # BAC below which ethanol has essentially no central-nervous-system effect, so it
 # drives no tolerance. Used as the floor of the exposure integral.
 TOLERANCE_BAC_THRESHOLD = 0.02
+
+# Michaelis constant for alcohol dehydrogenase, as a BAC. Elimination runs at half
+# its maximum rate at this concentration, so clearance is markedly slower while
+# blood alcohol is still low - both on the way up and in the final tail.
+ETHANOL_MICHAELIS_CONSTANT_BAC = 0.0082
+
+# Below this the pool is treated as empty, so the Michaelis-Menten tail (which
+# only approaches zero asymptotically) still terminates.
+_EMPTY_POOL_STANDARD_DRINKS = 1e-3
 
 # Treat a drink as fully absorbed once this little of it is left in the gut.
 _ABSORPTION_SETTLED_FRACTION = 1e-6
@@ -214,6 +229,14 @@ def _simulate_pool(
     lag = max(settings.absorption_lag_minutes, 0.0)
     elimination_per_minute = max(settings.elimination_standard_drinks_per_hour, 0.0) / 60.0
 
+    # The configured elimination rate is the *maximum* rate, reached only once
+    # blood alcohol is well above the Michaelis constant. Expressing that constant
+    # in pool units lets the whole simulation stay in standard drinks.
+    bac_per_drink = estimate_bac(1.0, settings)
+    michaelis_pool = (
+        ETHANOL_MICHAELIS_CONSTANT_BAC / bac_per_drink if bac_per_drink > 0 else 0.0
+    )
+
     total_minutes = max(int((sim_end - sim_start).total_seconds() // 60), 0)
     settled_at = [
         item.occurred_at + timedelta(minutes=_settled_after_minutes(item, settings))
@@ -249,7 +272,10 @@ def _simulate_pool(
 
         gained = max(absorbed - previous_absorbed, 0.0)
         previous_absorbed = absorbed
-        pool = max(0.0, pool + gained - elimination_per_minute)
+        pool += gained
+        pool -= elimination_per_minute * pool / (michaelis_pool + pool) if pool > 0 else 0.0
+        if pool < _EMPTY_POOL_STANDARD_DRINKS:
+            pool = 0.0
         values[minute] = pool
 
     return values

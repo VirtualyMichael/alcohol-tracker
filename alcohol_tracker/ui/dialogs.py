@@ -374,6 +374,10 @@ class SettingsDialog(QDialog):
         self.height.setSingleStep(1.0)
         self.height.setSuffix(" cm")
         self.height.setValue(settings.user_height_cm)
+        self.height_unit = QComboBox()
+        self.height_unit.addItems(["cm", "m", "ft/in"])
+        self._height_unit = "cm"
+        self.height_unit.currentTextChanged.connect(self._height_unit_changed)
 
         self.age = QDoubleSpinBox()
         self.age.setRange(15.0, 100.0)
@@ -404,7 +408,8 @@ class SettingsDialog(QDialog):
         form.addRow("Standard drink ABV", self.std_abv)
         form.addRow("BAC model", self.bac_model)
         form.addRow("Body weight", self.weight)
-        form.addRow("Height", self.height)
+        height_row = QHBoxLayout(); height_row.addWidget(self.height); height_row.addWidget(self.height_unit)
+        form.addRow("Height", height_row)
         form.addRow("Age", self.age)
         form.addRow("Gender (for BAC calc)", self.gender)
 
@@ -429,7 +434,18 @@ class SettingsDialog(QDialog):
             standard_drink_abv_percent=self.std_abv.value(),
             user_weight_lbs=self.weight.value(),
             user_gender=self.gender.currentText(),
-            user_height_cm=self.height.value(),
+            user_height_cm=self._height_cm(),
             user_age_years=self.age.value(),
             bac_model=self.bac_model.currentData(),
         )
+
+    def _height_cm(self) -> float:
+        unit = self.height_unit.currentText()
+        return self.height.value() * (100 if unit == "m" else 30.48 if unit == "ft/in" else 1)
+
+    def _height_unit_changed(self, unit: str) -> None:
+        cm = self.height.value() * (100 if self._height_unit == "m" else 30.48 if self._height_unit == "ft/in" else 1)
+        self._height_unit = unit
+        if unit == "m": self.height.setRange(1.0, 2.5); self.height.setDecimals(2); self.height.setValue(cm / 100); self.height.setSuffix(" m")
+        elif unit == "ft/in": self.height.setRange(3.0, 8.0); self.height.setDecimals(2); self.height.setValue(cm / 30.48); self.height.setSuffix(" ft")
+        else: self.height.setRange(100, 250); self.height.setDecimals(0); self.height.setValue(cm); self.height.setSuffix(" cm")

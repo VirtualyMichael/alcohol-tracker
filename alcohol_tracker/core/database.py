@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import sqlite3
+import json
 from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
 from alcohol_tracker.core.calculations import DrinkPreset, Ingestion
 from alcohol_tracker.core.settings import EstimateSettings
+from alcohol_tracker.core.recipes import BUILTIN_RECIPES, Recipe
 
 
 SCHEMA = """
@@ -36,6 +38,7 @@ CREATE TABLE IF NOT EXISTS drink_presets (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS recipes (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, payload TEXT NOT NULL, fingerprint TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 """
 
 DEFAULT_PRESETS = [
@@ -75,6 +78,19 @@ class IngestionStore:
                 
             connection.commit()
         self._seed_presets()
+        for recipe in BUILTIN_RECIPES: self.save_recipe(recipe)
+
+    def list_recipes(self) -> list[Recipe]:
+        with closing(self._connect()) as connection: rows = connection.execute("SELECT id, payload FROM recipes ORDER BY name COLLATE NOCASE").fetchall()
+        return [Recipe(int(row["id"]), **json.loads(row["payload"])) for row in rows]
+
+    def save_recipe(self, recipe: Recipe) -> bool:
+        now = datetime.now().isoformat(timespec="seconds")
+        with closing(self._connect()) as connection:
+            cursor = connection.execute("INSERT OR IGNORE INTO recipes (name,payload,fingerprint,created_at,updated_at) VALUES (?,?,?,?,?)", (recipe.name,json.dumps(recipe.payload(),sort_keys=True),recipe.fingerprint(),now,now)); connection.commit(); return cursor.rowcount > 0
+
+    def import_recipes(self, recipes: list[Recipe]) -> tuple[int,int]:
+        added=sum(self.save_recipe(recipe) for recipe in recipes); return added,len(recipes)-added
 
     def _seed_presets(self) -> None:
         if self.list_presets():
