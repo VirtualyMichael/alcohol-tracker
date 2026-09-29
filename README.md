@@ -12,9 +12,11 @@ Local desktop app for logging alcohol ingestions, reviewing prior drinking days,
 - Automatically defaults new ingestions to the current time
 - Local SQLite storage under `%LOCALAPPDATA%\AlcoholTracker` on Windows, or `~/.local/share/AlcoholTracker` on Linux
 - Previous drinking days list
+- Analytics tab with scrollable standard-drinks-by-date chart, month/year calendar heatmap, and adjustable drinking-day and drinks-per-day averages
 - Estimated stacked effect timeline with a current-time `Now` marker
 - Tolerance trend showing the dose needed to match your tolerance-free baseline, with a projected return-to-baseline date
 - Adjustable estimate assumptions for absorption, elimination, body composition, and tolerance
+- Appearance settings with editable colors, animated rainbow accents, and adjustable window transparency
 - Windowed native build (Nuitka) with no command line window
 
 ## How the estimates work

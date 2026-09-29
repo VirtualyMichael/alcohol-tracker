@@ -4,10 +4,12 @@ import json
 import csv
 from datetime import datetime, timedelta
 
-from PySide6.QtCore import Qt, QPointF, QTimer, QDateTime
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QBrush, QFont
+from PySide6.QtCore import Qt, QPointF, QTimer, QDateTime, QDate, QEvent
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QBrush, QFont, QTextCharFormat, QLinearGradient
 from PySide6.QtWidgets import (
     QComboBox,
+    QCalendarWidget,
+    QDateEdit,
     QDateTimeEdit,
     QFileDialog,
     QFrame,
@@ -23,8 +25,14 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSplitter,
+    QScrollArea,
+    QTabWidget,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
+    QApplication,
+    QTableView,
+    QToolTip,
 )
 
 from alcohol_tracker.core.calculations import (
@@ -39,9 +47,17 @@ from alcohol_tracker.core.calculations import (
     peak_value,
     tolerance_multiplier_series,
 )
+from alcohol_tracker.core.analytics import (
+    average_drinking_days,
+    average_standard_drinks_per_day,
+    fill_daily_totals,
+)
 from alcohol_tracker.core.database import IngestionStore
 from alcohol_tracker.core.paths import default_db_path
-from alcohol_tracker.core.settings import load_estimate_settings, save_estimate_settings
+from alcohol_tracker.core.settings import (
+    load_estimate_settings, save_estimate_settings, load_appearance_settings,
+    save_appearance_settings, DEFAULT_APPEARANCE,
+)
 from alcohol_tracker.core.recipes import document as recipe_document, liquor_terms, parse as parse_recipes
 from alcohol_tracker.ui.dialogs import IngestionDialog, PresetDialog, SettingsDialog
 
@@ -71,6 +87,14 @@ class TimelineGraph(QWidget):
         self.reference_marker = (timestamp, text) if timestamp is not None else None
         self.update()
 
+    def set_theme(self, colors: dict[str, str]) -> None:
+        self.theme_background = QColor(colors.get("panel", DEFAULT_APPEARANCE["panel"]))
+        self.theme_border = QColor(colors.get("muted", DEFAULT_APPEARANCE["muted"]))
+        self.theme_text = QColor(colors.get("text", DEFAULT_APPEARANCE["text"]))
+        self.theme_muted = QColor(colors.get("muted", DEFAULT_APPEARANCE["muted"]))
+        self.theme_graph = QColor(colors.get("graph", DEFAULT_APPEARANCE["graph"]))
+        self.update()
+
     def mouseMoveEvent(self, event) -> None:
         self.hover_pos = event.position()
         self.update()
@@ -89,19 +113,21 @@ class TimelineGraph(QWidget):
         painter.setRenderHint(QPainter.Antialiasing)
 
         rect = self.rect().adjusted(8, 8, -8, -8)
-        painter.setPen(QPen(QColor("#343840"), 1))
-        painter.setBrush(QBrush(QColor("#15171a")))
+        painter.setPen(QPen(getattr(self, "theme_border", QColor("#343840")), 1))
+        painter.setBrush(QBrush(getattr(self, "theme_background", QColor("#15171a"))))
         painter.drawRoundedRect(rect, 8, 8)
 
         painter.setFont(QFont("Segoe UI", 11, QFont.Weight.DemiBold))
-        painter.setPen(QColor("#ececef"))
+        painter.setPen(getattr(self, "theme_text", QColor("#ececef")))
         painter.drawText(rect.adjusted(16, 14, -16, -14), Qt.AlignTop | Qt.AlignLeft, self.title)
         painter.setFont(QFont("Segoe UI", 9))
-        painter.setPen(QColor("#9da3ad"))
+        painter.setPen(getattr(self, "theme_muted", QColor("#9da3ad")))
         painter.drawText(rect.adjusted(16, 40, -16, -14), Qt.AlignTop | Qt.AlignLeft, self.subtitle)
 
         graph = rect.adjusted(30, 78, -30, -42)
-        painter.setPen(QPen(QColor("#252930"), 1))
+        grid_color = QColor(getattr(self, "theme_border", QColor("#252930")))
+        grid_color.setAlpha(75)
+        painter.setPen(QPen(grid_color, 1))
         for i in range(4):
             y = graph.top() + graph.height() * i / 3
             painter.drawLine(graph.left(), int(y), graph.right(), int(y))
@@ -132,12 +158,14 @@ class TimelineGraph(QWidget):
         fill_path.lineTo(graph.right(), graph.bottom())
         fill_path.lineTo(graph.left(), graph.bottom())
         fill_path.closeSubpath()
-        painter.fillPath(fill_path, QColor(201, 151, 0, 58))
+        fill_color = QColor(getattr(self, "theme_graph", QColor("#c99700")))
+        fill_color.setAlpha(58)
+        painter.fillPath(fill_path, fill_color)
 
         line_path = QPainterPath(mapped[0])
         for point in mapped[1:]:
             line_path.lineTo(point)
-        painter.setPen(QPen(QColor("#c99700"), 4, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        painter.setPen(QPen(getattr(self, "theme_graph", QColor("#c99700")), 4, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
         painter.drawPath(line_path)
 
         painter.setPen(QPen(QColor("#d8ae27"), 1, Qt.DashLine))
@@ -182,7 +210,7 @@ class TimelineGraph(QWidget):
                     if self.bac_converter is not None:
                         label += f"  |  {self.bac_converter(hover_value):.3f}% BAC"
                 painter.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
-                painter.setPen(QColor("#ececef"))
+                painter.setPen(getattr(self, "theme_text", QColor("#ececef")))
                 
                 fm = painter.fontMetrics()
                 text_width = fm.horizontalAdvance(label)
@@ -195,7 +223,7 @@ class TimelineGraph(QWidget):
                 painter.drawText(int(text_x), graph.top() - 6, label)
 
         painter.setFont(QFont("Segoe UI", 8))
-        painter.setPen(QColor("#7f858f"))
+        painter.setPen(getattr(self, "theme_muted", QColor("#7f858f")))
         bottom = graph.adjusted(0, graph.height() + 8, 0, 28)
         axis_format = "%b %d" if self.axis_date_only else "%b %d %I:%M %p"
         painter.drawText(bottom, Qt.AlignLeft, min_time.strftime(axis_format))
@@ -262,6 +290,111 @@ class StatCard(QFrame):
         self.value.setText(value)
 
 
+class DailyBarChart(QWidget):
+    """Scrollable one-bar-per-calendar-day chart with date and total tooltips."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.totals: dict[datetime, float] = {}
+        self.graph_color = QColor(DEFAULT_APPEARANCE["graph"])
+        self.axis_color = QColor(DEFAULT_APPEARANCE["muted"])
+        self.panel_color = QColor(DEFAULT_APPEARANCE["panel"])
+        self.gradient_colors: list[str] = []
+        self.setMinimumHeight(250)
+        self.setMouseTracking(True)
+
+    def set_totals(self, totals: dict[datetime, float], graph_color: str, muted_color: str, panel_color: str, gradient_colors: list[str] | None = None) -> None:
+        self.totals = totals
+        self.graph_color = QColor(graph_color)
+        self.axis_color = QColor(muted_color)
+        self.panel_color = QColor(panel_color)
+        self.gradient_colors = gradient_colors or []
+        count = max(len(totals), 1)
+        self.setMinimumWidth(max(700, count * 42 + 70))
+        self.update()
+
+    def _day_at(self, x: float) -> datetime | None:
+        days = sorted(self.totals)
+        if not days:
+            return None
+        index = int((x - 44) / 42)
+        return days[index] if 0 <= index < len(days) else None
+
+    def mouseMoveEvent(self, event) -> None:
+        day = self._day_at(event.position().x())
+        if day is not None:
+            self.setToolTip(f"{day:%a, %b %d %Y}: {self.totals[day]:.2f} standard drinks")
+        else:
+            self.setToolTip("")
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt API naming
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.fillRect(self.rect(), self.panel_color)
+        days = sorted(self.totals)
+        if not days:
+            painter.setPen(self.axis_color)
+            painter.drawText(self.rect(), Qt.AlignCenter, "No ingestions logged")
+            return
+        plot = self.rect().adjusted(40, 18, -18, -48)
+        max_value = max(max(self.totals.values()), 1.0)
+        painter.setPen(QPen(QColor(90, 95, 105, 90), 1))
+        for level in range(4):
+            y = plot.bottom() - plot.height() * level / 3
+            painter.drawLine(plot.left(), int(y), plot.right(), int(y))
+        painter.setPen(self.axis_color)
+        painter.setFont(QFont("Segoe UI", 8))
+        for index, day in enumerate(days):
+            x = 44 + index * 42
+            value = self.totals[day]
+            bar_height = (plot.height() - 3) * value / max_value
+            if value > 0:
+                if self.gradient_colors:
+                    gradient = QLinearGradient(x, plot.top(), x + 24, plot.top())
+                    for index, color in enumerate(self.gradient_colors):
+                        gradient.setColorAt(index / max(len(self.gradient_colors) - 1, 1), QColor(color))
+                    painter.setBrush(QBrush(gradient))
+                else:
+                    painter.setBrush(self.graph_color)
+                painter.setPen(Qt.NoPen)
+                painter.drawRoundedRect(int(x), int(plot.bottom() - bar_height), 24, int(bar_height), 4, 4)
+            painter.setPen(self.axis_color)
+            painter.drawText(int(x - 5), plot.bottom() + 18, 36, 18, Qt.AlignCenter, day.strftime("%d"))
+            if index == 0 or day.day == 1 or day == days[-1]:
+                painter.drawText(int(x - 12), plot.bottom() + 37, 60, 18, Qt.AlignLeft, day.strftime("%b %Y"))
+        painter.setPen(self.axis_color)
+        painter.drawText(4, plot.top() + 8, f"{max_value:.1f}")
+
+
+class DrinkingCalendar(QCalendarWidget):
+    """Calendar heatmap that shows the total for the date under the pointer."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.daily_totals: dict[datetime, float] = {}
+        table = self.findChild(QTableView)
+        if table is not None:
+            table.setMouseTracking(True)
+            table.viewport().setMouseTracking(True)
+            table.viewport().installEventFilter(self)
+
+    def set_daily_totals(self, totals: dict[datetime, float]) -> None:
+        self.daily_totals = totals
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 - Qt API naming
+        if event.type() == QEvent.Type.MouseMove:
+            table = self.findChild(QTableView)
+            index = table.indexAt(event.position().toPoint()) if table is not None and watched is table.viewport() else None
+            if index is not None and index.isValid():
+                first = QDate(self.yearShown(), self.monthShown(), 1)
+                offset = (first.dayOfWeek() - int(self.firstDayOfWeek()) + 7) % 7
+                hovered = first.addDays(index.row() * 7 + index.column() - offset)
+                value = self.daily_totals.get(datetime.combine(hovered.toPython(), datetime.min.time()), 0.0)
+                text = f"{hovered.toString('dddd, MMMM d, yyyy')}: {value:.2f} standard drinks"
+                QToolTip.showText(event.globalPosition().toPoint(), text, self)
+        return super().eventFilter(watched, event)
+
+
 class MainWindow(QMainWindow):
     def __init__(self, store: IngestionStore | None = None) -> None:
         super().__init__()
@@ -269,15 +402,23 @@ class MainWindow(QMainWindow):
             store = IngestionStore(default_db_path())
         self.store = store
         self.settings = load_estimate_settings()
+        self.appearance = load_appearance_settings()
         self.current_ingestions: list[Ingestion] = []
         self.current_consumer = "All"
         self._auto_follow_night = True
         self.selected_day = self._natural_selected_day()
+        self._rainbow_tick = 0
 
         self.setWindowTitle("Alcohol Tracker")
         self.resize(1280, 820)
         self.setMinimumSize(1020, 680)
         self.setCentralWidget(self._build_content())
+        self.setWindowOpacity(self.appearance.opacity / 100.0)
+        self.rainbow_timer = QTimer(self)
+        self.rainbow_timer.setInterval(120)
+        self.rainbow_timer.timeout.connect(self._advance_rainbow)
+        if self.appearance.rainbow_enabled:
+            self.rainbow_timer.start()
         self.now_timer = QTimer(self)
         self.now_timer.setInterval(60_000)
         self.now_timer.timeout.connect(self.refresh_time_sensitive_views)
@@ -301,11 +442,13 @@ class MainWindow(QMainWindow):
         self.days_list = QListWidget()
         self.ingestion_list = QListWidget()
         self.effect_graph = TimelineGraph("Effect Timeline", "Estimated active standard drinks stacked over time.")
+        self.effect_graph.set_theme(self.appearance.colors)
         self.effect_graph.set_bac_converter(lambda value: estimate_bac(value, self.settings))
         self.tolerance_graph = TimelineGraph(
             "Tolerance Trend",
             "Dose needed to match your baseline, from recent CNS exposure.",
         )
+        self.tolerance_graph.set_theme(self.appearance.colors)
         self.tolerance_graph.min_value = 1.0
         self.tolerance_graph.value_formatter = lambda value: f"{value:.2f}x"
         self.tolerance_graph.axis_date_only = True
@@ -337,9 +480,217 @@ class MainWindow(QMainWindow):
         )
 
         layout.addWidget(self._build_header(), 0, 0, 1, 2)
-        layout.addWidget(self._build_sidebar(), 1, 0)
-        layout.addWidget(self._build_main_panel(), 1, 1)
+        self.main_tabs = QTabWidget()
+        tracker = QWidget()
+        tracker_layout = QGridLayout(tracker)
+        tracker_layout.setContentsMargins(0, 0, 0, 0)
+        tracker_layout.setHorizontalSpacing(16)
+        tracker_layout.addWidget(self._build_sidebar(), 0, 0)
+        tracker_layout.addWidget(self._build_main_panel(), 0, 1)
+        tracker_layout.setColumnStretch(1, 1)
+        self.main_tabs.addTab(tracker, "Tracker")
+        self._build_analytics_tab()
+        layout.addWidget(self.main_tabs, 1, 0, 1, 2)
         return root
+
+    @staticmethod
+    def _make_date_edit(date: QDate) -> QDateEdit:
+        edit = QDateEdit(date)
+        edit.setCalendarPopup(True)
+        edit.setDisplayFormat("MMM d, yyyy")
+        edit.setMaximumDate(QDate.currentDate())
+        return edit
+
+    def _build_analytics_tab(self) -> None:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(12)
+
+        chart_panel = QFrame()
+        chart_panel.setObjectName("Panel")
+        chart_layout = QVBoxLayout(chart_panel)
+        chart_heading = QLabel("Standard drinks by date")
+        chart_heading.setObjectName("SectionTitle")
+        chart_hint = QLabel("Scroll horizontally to review daily totals. Hover a bar for its exact total.")
+        chart_hint.setObjectName("Muted")
+        self.daily_chart = DailyBarChart()
+        chart_scroll = QScrollArea()
+        chart_scroll.setWidgetResizable(False)
+        chart_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        chart_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        chart_scroll.setWidget(self.daily_chart)
+        chart_layout.addWidget(chart_heading)
+        chart_layout.addWidget(chart_hint)
+        chart_layout.addWidget(chart_scroll, 1)
+        chart_panel.setMinimumHeight(310)
+        layout.addWidget(chart_panel, 1)
+
+        averages = QFrame()
+        averages.setObjectName("Panel")
+        avg_layout = QHBoxLayout(averages)
+        avg_layout.setContentsMargins(12, 10, 12, 10)
+        self.drinking_start = self._make_date_edit(QDate.currentDate().addDays(-6))
+        self.drinking_end = self._make_date_edit(QDate.currentDate())
+        self.drinks_start = self._make_date_edit(QDate.currentDate().addDays(-6))
+        self.drinks_end = self._make_date_edit(QDate.currentDate())
+        self.drinking_average = QLabel("0.00 days / week")
+        self.drinks_average = QLabel("0.00 standard drinks / day")
+        for label, start, end, value in (
+            ("Average drinking days per week", self.drinking_start, self.drinking_end, self.drinking_average),
+            ("Drinks per calendar day", self.drinks_start, self.drinks_end, self.drinks_average),
+        ):
+            column = QVBoxLayout()
+            title = QLabel(label)
+            title.setObjectName("SectionTitle")
+            dates = QHBoxLayout()
+            dates.addWidget(QLabel("From"))
+            dates.addWidget(start)
+            dates.addWidget(QLabel("To"))
+            dates.addWidget(end)
+            column.addWidget(title)
+            column.addLayout(dates)
+            value.setObjectName("StatValue")
+            column.addWidget(value)
+            avg_layout.addLayout(column, 1)
+        self.drinking_start.dateChanged.connect(lambda date: self._keep_order(self.drinking_start, self.drinking_end, date))
+        self.drinking_end.dateChanged.connect(lambda date: self._keep_order(self.drinking_end, self.drinking_start, date))
+        self.drinks_start.dateChanged.connect(lambda date: self._keep_order(self.drinks_start, self.drinks_end, date))
+        self.drinks_end.dateChanged.connect(lambda date: self._keep_order(self.drinks_end, self.drinks_start, date))
+        for edit in (self.drinking_start, self.drinking_end, self.drinks_start, self.drinks_end):
+            edit.dateChanged.connect(self.refresh_analytics)
+
+        calendar_panel = QFrame()
+        calendar_panel.setObjectName("Panel")
+        calendar_layout = QVBoxLayout(calendar_panel)
+        calendar_header = QHBoxLayout()
+        calendar_title = QLabel("Drinking calendar")
+        calendar_title.setObjectName("SectionTitle")
+        self.calendar_mode = QComboBox()
+        self.calendar_mode.addItem("Month", "month")
+        self.calendar_mode.addItem("Year", "year")
+        self.calendar_month = self._make_date_edit(QDate.currentDate())
+        self.calendar_month.setDisplayFormat("MMMM yyyy")
+        self.calendar_month.setMinimumDate(QDate(1900, 1, 1))
+        self.calendar_month.setMaximumDate(QDate(2200, 12, 31))
+        self.calendar_year = QSpinBox()
+        self.calendar_year.setRange(1900, 2200)
+        self.calendar_year.setValue(QDate.currentDate().year())
+        calendar_header.addWidget(calendar_title)
+        calendar_header.addStretch(1)
+        calendar_header.addWidget(self.calendar_mode)
+        calendar_header.addWidget(self.calendar_month)
+        calendar_header.addWidget(self.calendar_year)
+        calendar_layout.addLayout(calendar_header)
+        self.month_calendar = DrinkingCalendar()
+        self.month_calendar.setGridVisible(True)
+        self.year_scroll = QScrollArea()
+        self.year_scroll.setWidgetResizable(True)
+        self.year_contents = QWidget()
+        self.year_grid = QGridLayout(self.year_contents)
+        self.year_scroll.setWidget(self.year_contents)
+        self._year_calendars: list[QCalendarWidget] = []
+        calendar_layout.addWidget(self.month_calendar, 1)
+        calendar_layout.addWidget(self.year_scroll, 1)
+        self.calendar_mode.currentIndexChanged.connect(self._set_calendar_mode)
+        self.calendar_month.dateChanged.connect(self._update_calendar_month)
+        self.calendar_year.valueChanged.connect(self._update_calendar_year)
+        self.month_calendar.currentPageChanged.connect(self._month_calendar_page_changed)
+        layout.addWidget(averages)
+        layout.addWidget(calendar_panel, 2)
+        self.main_tabs.addTab(page, "Analytics")
+        self._set_calendar_mode()
+
+    def _set_calendar_mode(self, *_args) -> None:
+        year_mode = self.calendar_mode.currentData() == "year"
+        self.month_calendar.setVisible(not year_mode)
+        self.calendar_month.setVisible(not year_mode)
+        self.year_scroll.setVisible(year_mode)
+        self.calendar_year.setVisible(year_mode)
+        if year_mode and not self._year_calendars:
+            for month in range(1, 13):
+                calendar = DrinkingCalendar()
+                calendar.setGridVisible(True)
+                calendar.setNavigationBarVisible(False)
+                calendar.setVerticalHeaderFormat(QCalendarWidget.NoVerticalHeader)
+                calendar.setFixedHeight(210)
+                self._year_calendars.append(calendar)
+                self.year_grid.addWidget(calendar, (month - 1) // 3, (month - 1) % 3)
+        self._update_calendar_month(self.calendar_month.date())
+        self._update_calendar_year(self.calendar_year.value())
+        self.refresh_analytics()
+
+    def _update_calendar_month(self, date: QDate) -> None:
+        if self.calendar_year.value() != date.year():
+            self.calendar_year.setValue(date.year())
+        self.month_calendar.setCurrentPage(date.year(), date.month())
+
+    def _update_calendar_year(self, year: int) -> None:
+        month_date = self.calendar_month.date()
+        if month_date.year() != year:
+            self.calendar_month.setDate(QDate(year, month_date.month(), 1))
+        for month, calendar in enumerate(self._year_calendars, start=1):
+            calendar.setCurrentPage(year, month)
+        self.refresh_analytics()
+
+    def _month_calendar_page_changed(self, year: int, month: int) -> None:
+        date = QDate(year, month, 1)
+        if self.calendar_month.date().year() != year or self.calendar_month.date().month() != month:
+            self.calendar_month.setDate(date)
+        if self.calendar_year.value() != year:
+            self.calendar_year.setValue(year)
+        self.refresh_analytics()
+
+    @staticmethod
+    def _keep_order(changed: QDateEdit, other: QDateEdit, date: QDate) -> None:
+        if other.date() < date:
+            other.setDate(date)
+
+    @staticmethod
+    def _range_dates(start_edit: QDateEdit, end_edit: QDateEdit) -> tuple[datetime.date, datetime.date]:
+        start = start_edit.date().toPython()
+        end = end_edit.date().toPython()
+        return (start, max(start, end))
+
+    def refresh_analytics(self, *_args) -> None:
+        if not hasattr(self, "daily_chart"):
+            return
+        totals = fill_daily_totals(self.store.daily_standard_drinks(self.settings, self.current_consumer))
+        chart_totals = {datetime.combine(day, datetime.min.time()): value for day, value in totals.items()}
+        self._analytics_chart_totals = chart_totals
+        self._refresh_daily_chart_appearance()
+        self._paint_calendars(chart_totals)
+        start, end = self._range_dates(self.drinking_start, self.drinking_end)
+        span = (end - start).days + 1
+        days_average = average_drinking_days(totals, start, end)
+        self.drinking_average.setText(f"{days_average:.2f} days / week  ·  {span}-day range")
+        start, end = self._range_dates(self.drinks_start, self.drinks_end)
+        span = (end - start).days + 1
+        mean_drinks = average_standard_drinks_per_day(totals, start, end)
+        self.drinks_average.setText(f"{mean_drinks:.2f} standard drinks / day")
+
+    def _paint_calendars(self, totals: dict[datetime, float]) -> None:
+        max_total = max(totals.values(), default=0.0)
+        base = QColor(self._current_appearance_colors().get("graph", DEFAULT_APPEARANCE["graph"]))
+        calendars = [self.month_calendar, *self._year_calendars]
+        for calendar in calendars:
+            calendar.set_daily_totals(totals)
+            first = QDate(calendar.yearShown(), calendar.monthShown(), 1)
+            day = first.addDays(-(first.dayOfWeek() - 1))
+            for _ in range(42):
+                calendar.setDateTextFormat(day, QTextCharFormat())
+                key = datetime.combine(day.toPython(), datetime.min.time())
+                value = totals.get(key, 0.0)
+                if value > 0:
+                    fmt = QTextCharFormat()
+                    strength = 0.18 + 0.60 * (value / max_total if max_total else 0)
+                    color = QColor(base)
+                    color.setAlphaF(min(strength, 0.85))
+                    fmt.setBackground(color)
+                    fmt.setForeground(QColor(self.appearance.colors.get("text", DEFAULT_APPEARANCE["text"])))
+                    calendar.setDateTextFormat(day, fmt)
+                day = day.addDays(1)
+
 
     def _build_header(self) -> QWidget:
         frame = QWidget()
@@ -576,6 +927,7 @@ class MainWindow(QMainWindow):
         self.refresh_recipe_library()
         self.refresh_selected_day()
         self.refresh_tolerance_graph()
+        self.refresh_analytics()
 
     def refresh_time_sensitive_views(self) -> None:
         if self._auto_follow_night:
@@ -901,11 +1253,60 @@ class MainWindow(QMainWindow):
             self.refresh_all()
 
     def open_settings(self) -> None:
-        dialog = SettingsDialog(self.settings, self)
+        dialog = SettingsDialog(self.settings, self.appearance, self)
         if dialog.exec():
             self.settings = dialog.estimate_settings()
             save_estimate_settings(self.settings)
+            self.appearance = dialog.appearance_settings()
+            save_appearance_settings(self.appearance)
+            self.effect_graph.set_theme(self.appearance.colors)
+            self.tolerance_graph.set_theme(self.appearance.colors)
+            app = QApplication.instance()
+            if app is not None:
+                from alcohol_tracker.ui.theme import apply_dark_theme
+                gradient = self._rainbow_colors() if self.appearance.rainbow_enabled and self.appearance.rainbow_mode == "gradient" else None
+                apply_dark_theme(app, self.appearance.colors, gradient)
+            self.setWindowOpacity(self.appearance.opacity / 100.0)
+            self.rainbow_timer.stop()
+            self._rainbow_tick = 0
+            if self.appearance.rainbow_enabled:
+                self.rainbow_timer.start()
             self.refresh_all()
+
+    def _advance_rainbow(self) -> None:
+        self._rainbow_tick = (self._rainbow_tick + max(1, self.appearance.rainbow_speed // 8)) % 360
+        colors = self._current_appearance_colors()
+        self.effect_graph.set_theme(colors)
+        self.tolerance_graph.set_theme(colors)
+        app = QApplication.instance()
+        if app is not None:
+            from alcohol_tracker.ui.theme import apply_dark_theme
+            gradient = self._rainbow_colors() if self.appearance.rainbow_mode == "gradient" else None
+            apply_dark_theme(app, colors, gradient)
+        self._refresh_daily_chart_appearance()
+
+    def _current_appearance_colors(self) -> dict[str, str]:
+        colors = dict(self.appearance.colors)
+        if self.appearance.rainbow_enabled:
+            rainbow = self._rainbow_colors()
+            colors["accent"] = rainbow[0]
+            colors["graph"] = rainbow[0] if self.appearance.rainbow_mode == "solid" else rainbow[1]
+        return colors
+
+    def _refresh_daily_chart_appearance(self) -> None:
+        if not hasattr(self, "daily_chart"):
+            return
+        colors = self._current_appearance_colors()
+        self.daily_chart.set_totals(
+            getattr(self, "_analytics_chart_totals", {}),
+            colors.get("graph", DEFAULT_APPEARANCE["graph"]),
+            colors.get("muted", DEFAULT_APPEARANCE["muted"]),
+            colors.get("panel", DEFAULT_APPEARANCE["panel"]),
+            self._rainbow_colors() if self.appearance.rainbow_enabled and self.appearance.rainbow_mode == "gradient" else None,
+        )
+
+    def _rainbow_colors(self) -> list[str]:
+        return [QColor.fromHsv((self._rainbow_tick + shift) % 360, 220, 245).name() for shift in (0, 120, 240)]
 
     def _selected_ingestion(self) -> Ingestion | None:
         item = self.ingestion_list.currentItem()

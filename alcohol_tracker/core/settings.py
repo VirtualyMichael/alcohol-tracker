@@ -3,9 +3,54 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from PySide6.QtCore import QSettings
+from PySide6.QtGui import QColor
 
 BAC_MODEL_WATSON = "watson"
 BAC_MODEL_WIDMARK = "widmark"
+
+DEFAULT_APPEARANCE = {
+    "background": "#101113",
+    "panel": "#15171a",
+    "text": "#ececef",
+    "muted": "#9da3ad",
+    "accent": "#c99700",
+    "graph": "#c99700",
+}
+
+
+@dataclass(frozen=True)
+class AppearanceSettings:
+    colors: dict[str, str]
+    rainbow_enabled: bool = False
+    rainbow_mode: str = "gradient"
+    rainbow_speed: int = 50
+    opacity: int = 100
+
+
+def load_appearance_settings() -> AppearanceSettings:
+    settings = QSettings()
+    colors = {
+        role: str(settings.value(f"appearance/colors/{role}", value))
+        for role, value in DEFAULT_APPEARANCE.items()
+    }
+    return AppearanceSettings(
+        colors=colors,
+        rainbow_enabled=settings.value("appearance/rainbow_enabled", False, type=bool),
+        rainbow_mode=str(settings.value("appearance/rainbow_mode", "gradient")),
+        rainbow_speed=max(1, min(100, int(settings.value("appearance/rainbow_speed", 50)))),
+        opacity=max(50, min(100, int(settings.value("appearance/opacity", 100)))),
+    )
+
+
+def save_appearance_settings(values: AppearanceSettings) -> None:
+    settings = QSettings()
+    for role, default in DEFAULT_APPEARANCE.items():
+        color = values.colors.get(role, default)
+        settings.setValue(f"appearance/colors/{role}", color if QColor.isValidColor(color) else default)
+    settings.setValue("appearance/rainbow_enabled", values.rainbow_enabled)
+    settings.setValue("appearance/rainbow_mode", values.rainbow_mode)
+    settings.setValue("appearance/rainbow_speed", max(1, min(100, values.rainbow_speed)))
+    settings.setValue("appearance/opacity", max(50, min(100, values.opacity)))
 
 
 @dataclass(frozen=True)

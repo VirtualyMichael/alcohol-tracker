@@ -3,9 +3,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime
 
-from PySide6.QtCore import QDateTime
+from PySide6.QtCore import QDateTime, Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QComboBox,
+    QCheckBox,
+    QColorDialog,
     QDateTimeEdit,
     QDialog,
     QDialogButtonBox,
@@ -19,6 +22,9 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSpinBox,
+    QSlider,
+    QTabWidget,
+    QWidget,
     QVBoxLayout,
 )
 
@@ -26,6 +32,8 @@ from alcohol_tracker.core.calculations import DrinkPreset, Ingestion
 from alcohol_tracker.core.settings import (
     BAC_MODEL_WATSON,
     BAC_MODEL_WIDMARK,
+    AppearanceSettings,
+    DEFAULT_APPEARANCE,
     EstimateSettings,
 )
 
@@ -271,8 +279,9 @@ class PresetDialog(QDialog):
 
 
 class SettingsDialog(QDialog):
-    def __init__(self, settings: EstimateSettings, parent=None) -> None:
+    def __init__(self, settings: EstimateSettings, appearance: AppearanceSettings | None = None, parent=None) -> None:
         super().__init__(parent)
+        appearance = appearance or AppearanceSettings(dict(DEFAULT_APPEARANCE))
         self.setWindowTitle("Estimate Settings")
         self.setMinimumWidth(480)
 
@@ -413,14 +422,92 @@ class SettingsDialog(QDialog):
         form.addRow("Age", self.age)
         form.addRow("Gender (for BAC calc)", self.gender)
 
+        estimate_page = QWidget()
+        estimate_layout = QVBoxLayout(estimate_page)
+        estimate_layout.addWidget(help_label)
+        estimate_layout.addLayout(form)
+
+        appearance_page = QWidget()
+        appearance_layout = QVBoxLayout(appearance_page)
+        appearance_form = QFormLayout()
+        self.color_buttons: dict[str, QPushButton] = {}
+        role_labels = {
+            "background": "Background", "panel": "Panels", "text": "Text",
+            "muted": "Muted text", "accent": "Accent", "graph": "Graph",
+        }
+        for role, label in role_labels.items():
+            button = QPushButton()
+            button.clicked.connect(lambda _checked=False, r=role: self._choose_color(r))
+            self.color_buttons[role] = button
+            self._set_color_button(role, appearance.colors.get(role, DEFAULT_APPEARANCE[role]))
+            appearance_form.addRow(label, button)
+        self.rainbow_enabled = QCheckBox("Animate app accents")
+        self.rainbow_mode = QComboBox()
+        self.rainbow_mode.addItem("Moving gradient", "gradient")
+        self.rainbow_mode.addItem("One cycling color", "solid")
+        self.rainbow_mode.setCurrentIndex(max(0, self.rainbow_mode.findData(appearance.rainbow_mode)))
+        self.rainbow_enabled.setChecked(appearance.rainbow_enabled)
+        self.rainbow_speed = QSpinBox()
+        self.rainbow_speed.setRange(1, 100)
+        self.rainbow_speed.setSuffix(" % speed")
+        self.rainbow_speed.setValue(appearance.rainbow_speed)
+        self.opacity = QSlider(Qt.Horizontal)
+        self.opacity.setRange(50, 100)
+        self.opacity.setValue(appearance.opacity)
+        self.opacity_label = QLabel(f"{appearance.opacity}%")
+        opacity_row = QHBoxLayout()
+        opacity_row.addWidget(self.opacity, 1)
+        opacity_row.addWidget(self.opacity_label)
+        self.opacity.valueChanged.connect(lambda value: self.opacity_label.setText(f"{value}%"))
+        self.reset_appearance = QPushButton("Reset appearance")
+        self.reset_appearance.clicked.connect(self._reset_colors)
+        appearance_form.addRow("Rainbow mode", self.rainbow_mode)
+        appearance_form.addRow("Rainbow speed", self.rainbow_speed)
+        appearance_form.addRow("Window opacity", opacity_row)
+        appearance_layout.addWidget(self.rainbow_enabled)
+        appearance_layout.addLayout(appearance_form)
+        appearance_layout.addWidget(self.reset_appearance)
+        appearance_layout.addStretch(1)
+
+        self.tabs = QTabWidget()
+        self.tabs.addTab(estimate_page, "Estimates")
+        self.tabs.addTab(appearance_page, "Appearance")
+
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
 
         layout = QVBoxLayout(self)
-        layout.addWidget(help_label)
-        layout.addLayout(form)
+        layout.addWidget(self.tabs)
         layout.addWidget(buttons)
+
+    def _set_color_button(self, role: str, color: str) -> None:
+        self.color_buttons[role].setProperty("selectedColor", color)
+        self.color_buttons[role].setText(color.upper())
+        self.color_buttons[role].setStyleSheet(f"background: {color}; color: {'#111111' if QColor(color).lightness() > 145 else '#ffffff'};")
+
+    def _choose_color(self, role: str) -> None:
+        current = QColor(self.color_buttons[role].property("selectedColor"))
+        selected = QColorDialog.getColor(current, self, f"Choose {role} color")
+        if selected.isValid():
+            self._set_color_button(role, selected.name())
+
+    def _reset_colors(self) -> None:
+        for role, color in DEFAULT_APPEARANCE.items():
+            self._set_color_button(role, color)
+        self.rainbow_enabled.setChecked(False)
+        self.rainbow_mode.setCurrentIndex(0)
+        self.rainbow_speed.setValue(50)
+        self.opacity.setValue(100)
+
+    def appearance_settings(self) -> AppearanceSettings:
+        return AppearanceSettings(
+            colors={role: str(button.property("selectedColor")) for role, button in self.color_buttons.items()},
+            rainbow_enabled=self.rainbow_enabled.isChecked(),
+            rainbow_mode=str(self.rainbow_mode.currentData()),
+            rainbow_speed=self.rainbow_speed.value(),
+            opacity=self.opacity.value(),
+        )
 
     def estimate_settings(self) -> EstimateSettings:
         return EstimateSettings(
