@@ -28,7 +28,7 @@ param(
     [switch]$NoInstaller,
     [string]$SignThumbprint,
     [string]$TimestampUrl = "http://timestamp.digicert.com",
-    [string]$Version = "1.3.0.0",
+    [string]$Version = "1.4.1.0",
     [string]$Publisher = "Alcohol Tracker Project"
 )
 

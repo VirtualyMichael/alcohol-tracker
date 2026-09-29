@@ -10,7 +10,7 @@
 ; them are things this app needs.
 
 #ifndef AppVersion
-  #define AppVersion "1.3.0.0"
+  #define AppVersion "1.4.1.0"
 #endif
 #ifndef AppPublisher
   #define AppPublisher "Alcohol Tracker Project"

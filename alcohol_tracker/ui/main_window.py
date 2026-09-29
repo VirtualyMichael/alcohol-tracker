@@ -300,25 +300,35 @@ class DailyBarChart(QWidget):
         self.axis_color = QColor(DEFAULT_APPEARANCE["muted"])
         self.panel_color = QColor(DEFAULT_APPEARANCE["panel"])
         self.gradient_colors: list[str] = []
+        self._days: list[datetime] = []
+        self._max_value = 1.0
         self.setMinimumHeight(250)
         self.setMouseTracking(True)
 
-    def set_totals(self, totals: dict[datetime, float], graph_color: str, muted_color: str, panel_color: str, gradient_colors: list[str] | None = None) -> None:
+    def set_totals(self, totals: dict[datetime, float]) -> None:
         self.totals = totals
-        self.graph_color = QColor(graph_color)
-        self.axis_color = QColor(muted_color)
-        self.panel_color = QColor(panel_color)
-        self.gradient_colors = gradient_colors or []
-        count = max(len(totals), 1)
+        self._days = sorted(totals)
+        self._max_value = max(max(totals.values(), default=0.0), 1.0)
+        count = max(len(self._days), 1)
         self.setMinimumWidth(max(700, count * 42 + 70))
         self.update()
 
+    def set_colors(self, graph_color: str, muted_color: str, panel_color: str, gradient_colors: list[str] | None = None) -> None:
+        graph = QColor(graph_color)
+        axis = QColor(muted_color)
+        panel = QColor(panel_color)
+        gradient = gradient_colors or []
+        if (graph, axis, panel, gradient) == (self.graph_color, self.axis_color, self.panel_color, self.gradient_colors):
+            return
+        self.graph_color, self.axis_color, self.panel_color = graph, axis, panel
+        self.gradient_colors = gradient
+        self.update()
+
     def _day_at(self, x: float) -> datetime | None:
-        days = sorted(self.totals)
-        if not days:
+        if not self._days:
             return None
         index = int((x - 44) / 42)
-        return days[index] if 0 <= index < len(days) else None
+        return self._days[index] if 0 <= index < len(self._days) else None
 
     def mouseMoveEvent(self, event) -> None:
         day = self._day_at(event.position().x())
@@ -331,20 +341,23 @@ class DailyBarChart(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         painter.fillRect(self.rect(), self.panel_color)
-        days = sorted(self.totals)
+        days = self._days
         if not days:
             painter.setPen(self.axis_color)
             painter.drawText(self.rect(), Qt.AlignCenter, "No ingestions logged")
             return
         plot = self.rect().adjusted(40, 18, -18, -48)
-        max_value = max(max(self.totals.values()), 1.0)
+        max_value = self._max_value
         painter.setPen(QPen(QColor(90, 95, 105, 90), 1))
         for level in range(4):
             y = plot.bottom() - plot.height() * level / 3
             painter.drawLine(plot.left(), int(y), plot.right(), int(y))
         painter.setPen(self.axis_color)
         painter.setFont(QFont("Segoe UI", 8))
-        for index, day in enumerate(days):
+        first_index = max(0, (event.rect().left() - 44) // 42 - 1)
+        last_index = min(len(days), (event.rect().right() - 44) // 42 + 2)
+        for index in range(first_index, last_index):
+            day = days[index]
             x = 44 + index * 42
             value = self.totals[day]
             bar_height = (plot.height() - 3) * value / max_value
@@ -413,6 +426,8 @@ class MainWindow(QMainWindow):
         self.resize(1280, 820)
         self.setMinimumSize(1020, 680)
         self.setCentralWidget(self._build_content())
+        self._accent_buttons = [button for button in self.findChildren(QPushButton) if button.objectName() == "PrimaryButton"]
+        self._accent_labels = [label for label in self.findChildren(QLabel) if label.objectName() == "StatValue"]
         self.setWindowOpacity(self.appearance.opacity / 100.0)
         self.rainbow_timer = QTimer(self)
         self.rainbow_timer.setInterval(120)
@@ -424,6 +439,8 @@ class MainWindow(QMainWindow):
         self.now_timer.timeout.connect(self.refresh_time_sensitive_views)
         self.now_timer.start()
         self.refresh_all()
+        if self.appearance.rainbow_enabled:
+            self._update_animated_accents()
 
     def _build_content(self) -> QWidget:
         root = QWidget()
@@ -658,6 +675,7 @@ class MainWindow(QMainWindow):
         totals = fill_daily_totals(self.store.daily_standard_drinks(self.settings, self.current_consumer))
         chart_totals = {datetime.combine(day, datetime.min.time()): value for day, value in totals.items()}
         self._analytics_chart_totals = chart_totals
+        self.daily_chart.set_totals(chart_totals)
         self._refresh_daily_chart_appearance()
         self._paint_calendars(chart_totals)
         start, end = self._range_dates(self.drinking_start, self.drinking_end)
@@ -1253,36 +1271,67 @@ class MainWindow(QMainWindow):
             self.refresh_all()
 
     def open_settings(self) -> None:
+        self.rainbow_timer.stop()
         dialog = SettingsDialog(self.settings, self.appearance, self)
         if dialog.exec():
-            self.settings = dialog.estimate_settings()
-            save_estimate_settings(self.settings)
-            self.appearance = dialog.appearance_settings()
-            save_appearance_settings(self.appearance)
-            self.effect_graph.set_theme(self.appearance.colors)
-            self.tolerance_graph.set_theme(self.appearance.colors)
-            app = QApplication.instance()
-            if app is not None:
-                from alcohol_tracker.ui.theme import apply_dark_theme
-                gradient = self._rainbow_colors() if self.appearance.rainbow_enabled and self.appearance.rainbow_mode == "gradient" else None
-                apply_dark_theme(app, self.appearance.colors, gradient)
-            self.setWindowOpacity(self.appearance.opacity / 100.0)
-            self.rainbow_timer.stop()
-            self._rainbow_tick = 0
-            if self.appearance.rainbow_enabled:
-                self.rainbow_timer.start()
-            self.refresh_all()
+            new_settings = dialog.estimate_settings()
+            new_appearance = dialog.appearance_settings()
+            settings_changed = new_settings != self.settings
+            appearance_changed = new_appearance != self.appearance
+            if settings_changed:
+                self.settings = new_settings
+                save_estimate_settings(self.settings)
+            if appearance_changed:
+                previous = self.appearance
+                self.appearance = new_appearance
+                save_appearance_settings(self.appearance)
+                if previous.colors != self.appearance.colors:
+                    app = QApplication.instance()
+                    if app is not None:
+                        from alcohol_tracker.ui.theme import apply_dark_theme
+                        apply_dark_theme(app, self.appearance.colors)
+                if previous.opacity != self.appearance.opacity:
+                    self.setWindowOpacity(self.appearance.opacity / 100.0)
+                self._rainbow_tick = 0
+                self._update_animated_accents()
+                if not settings_changed and (
+                    previous.colors.get("graph") != self.appearance.colors.get("graph")
+                    or previous.colors.get("text") != self.appearance.colors.get("text")
+                    or previous.rainbow_enabled != self.appearance.rainbow_enabled
+                    or previous.rainbow_mode != self.appearance.rainbow_mode
+                ):
+                    self._paint_calendars(getattr(self, "_analytics_chart_totals", {}))
+            if settings_changed:
+                self.refresh_all()
+        if self.appearance.rainbow_enabled:
+            self.rainbow_timer.start()
 
     def _advance_rainbow(self) -> None:
+        if not self.isVisible() or self.isMinimized():
+            return
         self._rainbow_tick = (self._rainbow_tick + max(1, self.appearance.rainbow_speed // 8)) % 360
+        self._update_animated_accents()
+
+    def _update_animated_accents(self) -> None:
         colors = self._current_appearance_colors()
         self.effect_graph.set_theme(colors)
         self.tolerance_graph.set_theme(colors)
-        app = QApplication.instance()
-        if app is not None:
-            from alcohol_tracker.ui.theme import apply_dark_theme
-            gradient = self._rainbow_colors() if self.appearance.rainbow_mode == "gradient" else None
-            apply_dark_theme(app, colors, gradient)
+        accent = colors.get("accent", DEFAULT_APPEARANCE["accent"])
+        if self.appearance.rainbow_enabled:
+            rainbow = self._rainbow_colors()
+            if self.appearance.rainbow_mode == "gradient":
+                stops = ",".join(f"stop:{index / 2:.2f} {color}" for index, color in enumerate(rainbow))
+                fill = f"qlineargradient(x1:0,y1:0,x2:1,y2:0,{stops})"
+            else:
+                fill = accent
+            button_style = f"background: {fill}; border-color: {accent}; color: {colors['background']};"
+            label_style = f"color: {accent};"
+        else:
+            button_style = label_style = ""
+        for button in self._accent_buttons:
+            button.setStyleSheet(button_style)
+        for label in self._accent_labels:
+            label.setStyleSheet(label_style)
         self._refresh_daily_chart_appearance()
 
     def _current_appearance_colors(self) -> dict[str, str]:
@@ -1297,8 +1346,7 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "daily_chart"):
             return
         colors = self._current_appearance_colors()
-        self.daily_chart.set_totals(
-            getattr(self, "_analytics_chart_totals", {}),
+        self.daily_chart.set_colors(
             colors.get("graph", DEFAULT_APPEARANCE["graph"]),
             colors.get("muted", DEFAULT_APPEARANCE["muted"]),
             colors.get("panel", DEFAULT_APPEARANCE["panel"]),
