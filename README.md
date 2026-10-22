@@ -18,6 +18,17 @@ Local desktop app for logging alcohol ingestions, reviewing prior drinking days,
 - Adjustable estimate assumptions for absorption, elimination, body composition, and tolerance
 - Appearance settings with editable colors, animated rainbow accents, and adjustable window transparency
 - Windowed native build (Nuitka) with no command line window
+- **AI and voice logging (optional, separate install):** the `alcohol-tracker` MCP server from the "My MCP" repo lets a voice assistant, Bionic or Claude log preset drinks ("I just had a beer", with a read-back and a yes), undo its own recent entries, and produce detailed reports by time and amount. See [AI and voice access](#ai-and-voice-access)
+
+## AI and voice access
+
+The tracker works with AI assistants through a small MCP server, kept in its own repo (`My MCP`, folder `servers/alcohol-tracker`) so it installs separately from this app. Install it with `python install.py alcohol-tracker` and restart your assistant; it finds this app's database automatically.
+
+- Say what you drank; the assistant matches one of your saved presets, reads it back (with any limit warnings) and logs it only after you say yes. Back-dating ("an hour ago") works for the last 24 hours.
+- Say "undo" within 10 minutes to remove what the assistant just added.
+- Ask for reports: today, week, month, year or a custom range, with totals, averages, heaviest day, weekday and hour patterns, drink mix, sessions with estimated peak BAC, and the change from the previous period. A detailed copy can be saved as a markdown file.
+- Safety: the assistant can never edit or delete your records, only add preset doses and undo its own recent ones (tagged `[AI]` in notes). Writes are restricted at the database level, and the app's data is backed up daily and before each write (`%LOCALAPPDATA%\AlcoholTracker\backups`). Spoken warnings use limits you set in `%LOCALAPPDATA%\AlcoholTracker\assistant_limits.json`.
+- A drink the assistant adds shows on the selected day within about a minute (the app refreshes once a minute); the days list and analytics catch up on the next restart.
 
 ## How the estimates work
 
