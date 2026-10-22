@@ -22,7 +22,7 @@ Local desktop app for logging alcohol ingestions, reviewing prior drinking days,
 
 ## AI and voice access
 
-The tracker works with AI assistants through a small MCP server, kept in its own repo (`My MCP`, folder `servers/alcohol-tracker`) so it installs separately from this app. Install it with `python install.py alcohol-tracker` and restart your assistant; it finds this app's database automatically.
+The tracker works with AI assistants through a small MCP server, kept in its own repo, [my-mcp](https://github.com/VirtualyMichael/my-mcp) (folder `servers/alcohol-tracker`), so it installs separately from this app. Clone it and run `python install.py alcohol-tracker` and restart your assistant; it finds this app's database automatically.
 
 - Say what you drank; the assistant matches one of your saved presets, reads it back (with any limit warnings) and logs it only after you say yes. Back-dating ("an hour ago") works for the last 24 hours.
 - Say "undo" within 10 minutes to remove what the assistant just added.
